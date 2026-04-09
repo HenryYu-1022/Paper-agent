@@ -1,0 +1,238 @@
+from __future__ import annotations
+
+import argparse
+import threading
+import time
+from pathlib import Path
+
+from watchdog.events import FileSystemEvent, FileSystemEventHandler
+from watchdog.observers import Observer
+
+try:
+    from .common import (
+        cleanup_marker_raw_root,
+        ensure_directories,
+        find_all_pdfs,
+        load_config,
+        manifest_path,
+        markdown_root,
+        pdf_fingerprint,
+        relative_pdf_path,
+        setup_logger,
+        work_root,
+    )
+    from .pipeline import ManifestStore, convert_one_pdf, delete_pdf_artifacts
+except ImportError:
+    from common import (
+        cleanup_marker_raw_root,
+        ensure_directories,
+        find_all_pdfs,
+        load_config,
+        manifest_path,
+        markdown_root,
+        pdf_fingerprint,
+        relative_pdf_path,
+        setup_logger,
+        work_root,
+    )
+    from pipeline import ManifestStore, convert_one_pdf, delete_pdf_artifacts
+
+
+def is_pdf_path(path: str) -> bool:
+    return Path(path).suffix.lower() == ".pdf"
+
+
+def wait_until_stable(path: Path, checks: int, interval_seconds: int) -> bool:
+    if checks <= 0:
+        return path.exists()
+
+    previous = None
+    stable_count = 0
+
+    while stable_count < checks:
+        if not path.exists():
+            return False
+        stat = path.stat()
+        current = (stat.st_size, stat.st_mtime_ns)
+        if current == previous:
+            stable_count += 1
+        else:
+            stable_count = 0
+            previous = current
+        time.sleep(interval_seconds)
+    return True
+
+
+class PdfEventHandler(FileSystemEventHandler):
+    def __init__(self, config_path: str | None = None) -> None:
+        self.config_path = config_path
+        self.config = load_config(config_path)
+        ensure_directories(self.config)
+        self.logger = setup_logger(self.config, logger_name="pdf_to_markdown.watch")
+        self.source_dir = Path(self.config["source_dir"])
+        self.pending: dict[Path, float] = {}
+        self.in_progress: set[Path] = set()
+        self.lock = threading.Lock()
+        self.running = True
+        self.rescan_interval_seconds = int(self.config.get("watch_rescan_interval_seconds", 60))
+        self.enable_initial_scan = bool(self.config.get("watch_initial_scan", True))
+        self.next_rescan_at = time.time()
+
+        self.worker = threading.Thread(target=self._process_loop, daemon=True)
+        self.worker.start()
+
+        if self.enable_initial_scan:
+            scheduled = self._rescan_source_dir(reason="startup")
+            self.logger.info("Startup rescan queued PDFs: %s", scheduled)
+
+    def on_created(self, event: FileSystemEvent) -> None:
+        if not event.is_directory and is_pdf_path(event.src_path):
+            self._schedule(Path(event.src_path))
+
+    def on_modified(self, event: FileSystemEvent) -> None:
+        if not event.is_directory and is_pdf_path(event.src_path):
+            self._schedule(Path(event.src_path))
+
+    def on_moved(self, event: FileSystemEvent) -> None:
+        if not event.is_directory and is_pdf_path(event.dest_path):
+            self._schedule(Path(event.dest_path))
+
+    def on_deleted(self, event: FileSystemEvent) -> None:
+        if not event.is_directory and is_pdf_path(event.src_path):
+            self._schedule_deletion(Path(event.src_path))
+
+    def _schedule_deletion(self, pdf_path: Path) -> None:
+        resolved = pdf_path.resolve()
+        rel_key = str(resolved.relative_to(self.source_dir.resolve())).replace("\\", "/")
+        self.logger.info("PDF deleted, cleaning up artifacts: %s", rel_key)
+        try:
+            manifest = ManifestStore(manifest_path(self.config))
+            result = delete_pdf_artifacts(rel_key, self.config, manifest, self.logger)
+            if result.get("deleted"):
+                self.logger.info("Cleanup completed for deleted PDF: %s", rel_key)
+            else:
+                self.logger.info("No artifacts to clean for: %s (%s)", rel_key, result.get("reason"))
+        except Exception:
+            self.logger.exception("Failed to clean up artifacts for deleted PDF: %s", rel_key)
+
+    def _schedule(self, pdf_path: Path) -> bool:
+        resolved = pdf_path.resolve()
+        with self.lock:
+            if resolved in self.pending or resolved in self.in_progress:
+                return False
+            self.pending[resolved] = time.time()
+        self.logger.info("Queued PDF for processing: %s", pdf_path)
+        return True
+
+    def _needs_processing(self, pdf_path: Path, manifest: ManifestStore) -> bool:
+        rel_key = str(relative_pdf_path(pdf_path, self.source_dir)).replace("\\", "/")
+        fingerprint = pdf_fingerprint(
+            pdf_path,
+            use_sha256=self.config.get("compute_sha256", False),
+        )
+        return not manifest.is_unchanged(rel_key, fingerprint)
+
+    def _rescan_source_dir(self, reason: str) -> int:
+        manifest = ManifestStore(manifest_path(self.config))
+        scheduled = 0
+
+        for pdf_path in find_all_pdfs(self.source_dir):
+            if self._needs_processing(pdf_path, manifest) and self._schedule(pdf_path):
+                scheduled += 1
+
+        if scheduled > 0:
+            self.logger.info("%s rescan found PDFs to process: %s", reason, scheduled)
+        return scheduled
+
+    def _process_loop(self) -> None:
+        debounce_seconds = int(self.config.get("watch_debounce_seconds", 8))
+        stable_checks = int(self.config.get("watch_stable_checks", 3))
+        stable_interval = int(self.config.get("watch_stable_interval_seconds", 2))
+
+        while self.running:
+            ready: list[Path] = []
+            now = time.time()
+
+            if self.rescan_interval_seconds > 0 and now >= self.next_rescan_at:
+                try:
+                    self._rescan_source_dir(reason="periodic")
+                except Exception:
+                    self.logger.exception("Periodic rescan failed")
+                self.next_rescan_at = now + self.rescan_interval_seconds
+
+            with self.lock:
+                for path, last_event_ts in list(self.pending.items()):
+                    if now - last_event_ts >= debounce_seconds:
+                        ready.append(path)
+                        del self.pending[path]
+
+            for pdf_path in ready:
+                with self.lock:
+                    self.in_progress.add(pdf_path)
+
+                self.logger.info("Waiting for file to stabilize: %s", pdf_path)
+                if not wait_until_stable(pdf_path, stable_checks, stable_interval):
+                    with self.lock:
+                        self.in_progress.discard(pdf_path)
+                    self.logger.warning("File is not stable or disappeared: %s", pdf_path)
+                    continue
+
+                try:
+                    convert_one_pdf(pdf_path, config_path=self.config_path, force_reconvert=False)
+                except Exception:
+                    self.logger.exception("Watcher conversion failed: %s", pdf_path)
+                finally:
+                    with self.lock:
+                        self.in_progress.discard(pdf_path)
+
+            time.sleep(1)
+
+    def stop(self) -> None:
+        self.running = False
+        self.worker.join(timeout=5)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Watch the source PDF folder and convert new PDFs to Markdown."
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Optional path to settings.json. Defaults to the workflow directory.",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    config = load_config(args.config)
+    ensure_directories(config)
+    logger = setup_logger(config, logger_name="pdf_to_markdown.watch.main")
+
+    source_dir = Path(config["source_dir"])
+    handler = PdfEventHandler(config_path=args.config)
+    observer = Observer()
+    observer.schedule(handler, str(source_dir), recursive=True)
+    observer.start()
+
+    logger.info("Watching source directory: %s", source_dir)
+    logger.info("Work root: %s", work_root(config))
+    logger.info("Markdown root: %s", markdown_root(config))
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Received shutdown signal. Stopping watcher.")
+    finally:
+        handler.stop()
+        observer.stop()
+        observer.join()
+        cleanup_marker_raw_root(config, logger)
+
+
+if __name__ == "__main__":
+    main()

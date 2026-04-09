@@ -1,0 +1,22 @@
+{
+  "source_dir": "G:\\YourDrive\\Zotero_Papers",
+  "work_root": "G:\\YourDrive\\zoterotomarkdown",
+  "pythonw_path": "C:\\path\\to\\pythonw.exe",
+  "model_cache_dir": "D:\\marker\\datalab_model_cache",
+  "marker_cli": "C:\\path\\to\\marker_single.exe",
+  "marker_repo_root": "D:\\marker",
+  "hf_home": "D:\\marker\\hf_cache",
+  "torch_device": "cuda",
+  "output_format": "markdown",
+  "force_ocr": true,
+  "disable_image_extraction": false,
+  "disable_multiprocessing": false,
+  "paginate_output": false,
+  "compute_sha256": false,
+  "log_level": "INFO",
+  "watch_debounce_seconds": 8,
+  "watch_stable_checks": 3,
+  "watch_stable_interval_seconds": 2,
+  "watch_rescan_interval_seconds": 0,
+  "watch_initial_scan": false
+}
