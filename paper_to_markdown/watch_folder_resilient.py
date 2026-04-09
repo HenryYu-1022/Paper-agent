@@ -16,10 +16,10 @@ try:
         load_config,
         manifest_path,
         markdown_root,
+        output_root,
         pdf_fingerprint,
         relative_pdf_path,
         setup_logger,
-        work_root,
     )
     from .pipeline import ManifestStore, convert_one_pdf, delete_pdf_artifacts
 except ImportError:
@@ -30,10 +30,10 @@ except ImportError:
         load_config,
         manifest_path,
         markdown_root,
+        output_root,
         pdf_fingerprint,
         relative_pdf_path,
         setup_logger,
-        work_root,
     )
     from pipeline import ManifestStore, convert_one_pdf, delete_pdf_artifacts
 
@@ -68,8 +68,8 @@ class PdfEventHandler(FileSystemEventHandler):
         self.config_path = config_path
         self.config = load_config(config_path)
         ensure_directories(self.config)
-        self.logger = setup_logger(self.config, logger_name="pdf_to_markdown.watch")
-        self.source_dir = Path(self.config["source_dir"])
+        self.logger = setup_logger(self.config, logger_name="paper_to_markdown.watch")
+        self.input_root = Path(self.config["input_root"])
         self.pending: dict[Path, float] = {}
         self.in_progress: set[Path] = set()
         self.lock = threading.Lock()
@@ -82,7 +82,7 @@ class PdfEventHandler(FileSystemEventHandler):
         self.worker.start()
 
         if self.enable_initial_scan:
-            scheduled = self._rescan_source_dir(reason="startup")
+            scheduled = self._rescan_input_root(reason="startup")
             self.logger.info("Startup rescan queued PDFs: %s", scheduled)
 
     def on_created(self, event: FileSystemEvent) -> None:
@@ -103,7 +103,7 @@ class PdfEventHandler(FileSystemEventHandler):
 
     def _schedule_deletion(self, pdf_path: Path) -> None:
         resolved = pdf_path.resolve()
-        rel_key = str(resolved.relative_to(self.source_dir.resolve())).replace("\\", "/")
+        rel_key = str(resolved.relative_to(self.input_root.resolve())).replace("\\", "/")
         self.logger.info("PDF deleted, cleaning up artifacts: %s", rel_key)
         try:
             manifest = ManifestStore(manifest_path(self.config))
@@ -125,18 +125,18 @@ class PdfEventHandler(FileSystemEventHandler):
         return True
 
     def _needs_processing(self, pdf_path: Path, manifest: ManifestStore) -> bool:
-        rel_key = str(relative_pdf_path(pdf_path, self.source_dir)).replace("\\", "/")
+        rel_key = str(relative_pdf_path(pdf_path, self.input_root)).replace("\\", "/")
         fingerprint = pdf_fingerprint(
             pdf_path,
             use_sha256=self.config.get("compute_sha256", False),
         )
         return not manifest.is_unchanged(rel_key, fingerprint)
 
-    def _rescan_source_dir(self, reason: str) -> int:
+    def _rescan_input_root(self, reason: str) -> int:
         manifest = ManifestStore(manifest_path(self.config))
         scheduled = 0
 
-        for pdf_path in find_all_pdfs(self.source_dir):
+        for pdf_path in find_all_pdfs(self.input_root):
             if self._needs_processing(pdf_path, manifest) and self._schedule(pdf_path):
                 scheduled += 1
 
@@ -155,7 +155,7 @@ class PdfEventHandler(FileSystemEventHandler):
 
             if self.rescan_interval_seconds > 0 and now >= self.next_rescan_at:
                 try:
-                    self._rescan_source_dir(reason="periodic")
+                    self._rescan_input_root(reason="periodic")
                 except Exception:
                     self.logger.exception("Periodic rescan failed")
                 self.next_rescan_at = now + self.rescan_interval_seconds
@@ -194,7 +194,7 @@ class PdfEventHandler(FileSystemEventHandler):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Watch the source PDF folder and convert new PDFs to Markdown."
+        description="Watch the input PDF folder and convert new PDFs to Markdown."
     )
     parser.add_argument(
         "--config",
@@ -210,16 +210,16 @@ def main() -> None:
 
     config = load_config(args.config)
     ensure_directories(config)
-    logger = setup_logger(config, logger_name="pdf_to_markdown.watch.main")
+    logger = setup_logger(config, logger_name="paper_to_markdown.watch.main")
 
-    source_dir = Path(config["source_dir"])
+    input_root = Path(config["input_root"])
     handler = PdfEventHandler(config_path=args.config)
     observer = Observer()
-    observer.schedule(handler, str(source_dir), recursive=True)
+    observer.schedule(handler, str(input_root), recursive=True)
     observer.start()
 
-    logger.info("Watching source directory: %s", source_dir)
-    logger.info("Work root: %s", work_root(config))
+    logger.info("Watching input directory: %s", input_root)
+    logger.info("Output root: %s", output_root(config))
     logger.info("Markdown root: %s", markdown_root(config))
 
     try:

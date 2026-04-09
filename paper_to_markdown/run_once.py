@@ -13,7 +13,7 @@ except ImportError:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Convert Google Drive PDFs to markdown.")
+    parser = argparse.ArgumentParser(description="Convert paper PDFs to markdown.")
     parser.add_argument(
         "--config",
         default=None,
@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--path",
         default=None,
-        help="Convert only one specific PDF. Leave empty to scan the whole source_dir.",
+        help="Convert only one specific PDF. Leave empty to scan the whole input_root.",
     )
     parser.add_argument(
         "--force",
@@ -38,7 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cleanup",
         action="store_true",
-        help="Remove markdown artifacts for PDFs that no longer exist in source_dir.",
+        help="Remove markdown artifacts for PDFs that no longer exist in input_root.",
     )
     return parser
 

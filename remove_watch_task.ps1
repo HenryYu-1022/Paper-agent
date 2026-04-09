@@ -1,5 +1,5 @@
 param(
-    [string]$TaskName = 'ZoteroPdfMarkdownWatch'
+    [string]$TaskName = 'PaperAgentWatch'
 )
 
 $ErrorActionPreference = 'Stop'

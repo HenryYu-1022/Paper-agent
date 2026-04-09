@@ -17,4 +17,4 @@ env/
 .idea/
 
 # Machine-specific configuration
-pdf_to_markdown/settings.json
+paper_to_markdown/settings.json

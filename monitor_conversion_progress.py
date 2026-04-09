@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from pdf_to_markdown.common import find_all_pdfs, load_config, logs_root, manifest_path
+from paper_to_markdown.common import find_all_pdfs, load_config, logs_root, manifest_path
 
 
 LOG_LINE_RE = re.compile(
@@ -74,9 +74,9 @@ def parse_timestamp(raw: str) -> datetime:
 
 
 def load_manifest_summary(config: dict[str, Any]) -> dict[str, int]:
-    source_dir = Path(config["source_dir"])
+    input_root = Path(config["input_root"])
     manifest_file = manifest_path(config)
-    total_pdfs = len(find_all_pdfs(source_dir))
+    total_pdfs = len(find_all_pdfs(input_root))
 
     if not manifest_file.exists():
         return {"total": total_pdfs, "success": 0, "failed": 0}
@@ -217,7 +217,7 @@ def build_report(config_path: str | None = None) -> str:
     latest_batch = parse_latest_batch(config)
 
     lines = [
-        f"Source PDFs: {manifest_summary['total']}",
+        f"Input PDFs: {manifest_summary['total']}",
         f"Manifest success: {manifest_summary['success']}",
         f"Manifest failed: {manifest_summary['failed']}",
     ]
@@ -269,7 +269,7 @@ def build_report(config_path: str | None = None) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Monitor Zotero PDF conversion progress without changing conversion logic."
+        description="Monitor paper PDF conversion progress without changing conversion logic."
     )
     parser.add_argument(
         "--config",

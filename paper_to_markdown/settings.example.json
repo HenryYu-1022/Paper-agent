@@ -1,0 +1,21 @@
+{
+  "input_root": "/Users/yourname/Documents/paper-library/input",
+  "output_root": "/Users/yourname/Documents/paper-library/output",
+  "python_path": "/opt/homebrew/bin/python3",
+  "model_cache_dir": "/Users/yourname/.cache/marker/datalab_model_cache",
+  "marker_cli": "/absolute/path/to/marker_single",
+  "hf_home": "/Users/yourname/.cache/huggingface",
+  "torch_device": "mps",
+  "output_format": "markdown",
+  "force_ocr": true,
+  "disable_image_extraction": false,
+  "disable_multiprocessing": false,
+  "paginate_output": false,
+  "compute_sha256": false,
+  "log_level": "INFO",
+  "watch_debounce_seconds": 8,
+  "watch_stable_checks": 3,
+  "watch_stable_interval_seconds": 2,
+  "watch_rescan_interval_seconds": 0,
+  "watch_initial_scan": false
+}

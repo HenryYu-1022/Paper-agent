@@ -230,18 +230,24 @@ def run_marker(config: dict[str, Any], pdf_path: Path, raw_output_dir: Path, log
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startupinfo.wShowWindow = getattr(subprocess, "SW_HIDE", 0)
 
-    result = subprocess.run(
-        command,
-        cwd=config["marker_repo_root"],
-        env=build_marker_env(config),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=False,
-        creationflags=creationflags,
-        startupinfo=startupinfo,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            cwd=config.get("marker_repo_root"),
+            env=build_marker_env(config),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+        )
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            "Marker executable not found. Set marker_cli to an absolute path, or ensure it is available on PATH."
+        ) from exc
+
     if result.returncode != 0:
         message = (
             f"marker conversion failed with exit code {result.returncode}\n"
@@ -308,10 +314,10 @@ def delete_pdf_artifacts(
 
 def build_conversion_metadata(
     pdf_path: Path,
-    source_dir: Path,
+    input_root: Path,
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    rel_pdf = relative_pdf_path(pdf_path, source_dir)
+    rel_pdf = relative_pdf_path(pdf_path, input_root)
     metadata = {
         "source_pdf": to_posix_path_str(pdf_path),
         "source_relpath": to_posix_path_str(rel_pdf),
@@ -397,11 +403,11 @@ def copy_supporting_assets(copy_root: Path, main_raw_md: Path, target_dir: Path)
 def materialize_primary_bundle(
     config: dict[str, Any],
     pdf_path: Path,
-    source_dir: Path,
+    input_root: Path,
     copy_root: Path,
     main_raw_md: Path,
 ) -> Path:
-    bundle_dir = bundle_dir_for_pdf(pdf_path, source_dir, config)
+    bundle_dir = bundle_dir_for_pdf(pdf_path, input_root, config)
     remove_primary_bundle_content(bundle_dir, markdown_root(config))
 
     shutil.copytree(copy_root, bundle_dir, dirs_exist_ok=True)
@@ -416,7 +422,7 @@ def materialize_primary_bundle(
         main_bundle_md.rename(desired_md_path)
         main_bundle_md = desired_md_path
 
-    metadata = build_conversion_metadata(pdf_path, source_dir, config)
+    metadata = build_conversion_metadata(pdf_path, input_root, config)
     metadata["document_role"] = "main"
     write_frontmatter_markdown(main_bundle_md, metadata)
     return main_bundle_md
@@ -425,13 +431,13 @@ def materialize_primary_bundle(
 def materialize_supporting_bundle(
     config: dict[str, Any],
     pdf_path: Path,
-    source_dir: Path,
+    input_root: Path,
     copy_root: Path,
     main_raw_md: Path,
     primary_pdf: Path,
     supporting_index: int,
 ) -> Path:
-    bundle_dir = bundle_dir_for_pdf(primary_pdf, source_dir, config)
+    bundle_dir = bundle_dir_for_pdf(primary_pdf, input_root, config)
     bundle_dir.mkdir(parents=True, exist_ok=True)
 
     target_md = bundle_dir / supporting_markdown_name(supporting_index)
@@ -450,11 +456,11 @@ def materialize_supporting_bundle(
     )
     target_md.write_text(supporting_text, encoding="utf-8")
 
-    metadata = build_conversion_metadata(pdf_path, source_dir, config)
+    metadata = build_conversion_metadata(pdf_path, input_root, config)
     metadata["document_role"] = "supporting"
     metadata["supporting_index"] = supporting_index
     metadata["primary_source_pdf"] = to_posix_path_str(primary_pdf)
-    metadata["primary_source_relpath"] = to_posix_path_str(relative_pdf_path(primary_pdf, source_dir))
+    metadata["primary_source_relpath"] = to_posix_path_str(relative_pdf_path(primary_pdf, input_root))
     metadata["primary_source_filename"] = primary_pdf.name
     write_frontmatter_markdown(target_md, metadata)
     return target_md
@@ -463,7 +469,7 @@ def materialize_supporting_bundle(
 def materialize_final_bundle(
     config: dict[str, Any],
     pdf_path: Path,
-    source_dir: Path,
+    input_root: Path,
     raw_output_dir: Path,
 ) -> Path:
     copy_root = detect_marker_content_root(raw_output_dir)
@@ -474,7 +480,7 @@ def materialize_final_bundle(
         return materialize_supporting_bundle(
             config,
             pdf_path=pdf_path,
-            source_dir=source_dir,
+            input_root=input_root,
             copy_root=copy_root,
             main_raw_md=main_raw_md,
             primary_pdf=primary_pdf,
@@ -484,7 +490,7 @@ def materialize_final_bundle(
     return materialize_primary_bundle(
         config,
         pdf_path=pdf_path,
-        source_dir=source_dir,
+        input_root=input_root,
         copy_root=copy_root,
         main_raw_md=main_raw_md,
     )
@@ -499,15 +505,15 @@ def convert_one_pdf(
     ensure_directories(config)
     logger = setup_logger(config)
 
-    source_dir = Path(config["source_dir"])
+    input_root = Path(config["input_root"])
     pdf = Path(pdf_path).resolve()
 
     if not pdf.exists():
         raise FileNotFoundError(f"PDF does not exist: {pdf}")
-    if not is_relative_to(pdf, source_dir):
-        raise ValueError(f"PDF is outside source_dir: {pdf}")
+    if not is_relative_to(pdf, input_root):
+        raise ValueError(f"PDF is outside input_root: {pdf}")
 
-    rel_key = str(relative_pdf_path(pdf, source_dir)).replace("\\", "/")
+    rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
     fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", False))
     manifest = ManifestStore(manifest_path(config))
 
@@ -518,11 +524,11 @@ def convert_one_pdf(
             return Path(existing["output_markdown"])
         return None
 
-    raw_output_dir = raw_dir_for_pdf(pdf, source_dir, config)
+    raw_output_dir = raw_dir_for_pdf(pdf, input_root, config)
 
     try:
         run_marker(config, pdf, raw_output_dir, logger)
-        final_md = materialize_final_bundle(config, pdf, source_dir, raw_output_dir)
+        final_md = materialize_final_bundle(config, pdf, input_root, raw_output_dir)
         manifest.mark_success(
             rel_key=rel_key,
             fingerprint=fingerprint,
@@ -552,11 +558,11 @@ def convert_all_pdfs(
     ensure_directories(config)
     logger = setup_logger(config)
 
-    source_dir = Path(config["source_dir"])
-    if not source_dir.exists():
-        raise FileNotFoundError(f"source_dir does not exist: {source_dir}")
+    input_root = Path(config["input_root"])
+    if not input_root.exists():
+        raise FileNotFoundError(f"input_root does not exist: {input_root}")
 
-    pdfs = find_all_pdfs(source_dir)
+    pdfs = find_all_pdfs(input_root)
     if limit is not None:
         pdfs = pdfs[:limit]
 
@@ -570,7 +576,7 @@ def convert_all_pdfs(
     write_failed_pdf_report(config, manifest)
 
     for pdf in pdfs:
-        rel_key = str(relative_pdf_path(pdf, source_dir)).replace("\\", "/")
+        rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
         fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", False))
         if not force_reconvert and manifest.is_unchanged(rel_key, fingerprint):
             logger.info("Skipping unchanged PDF: %s", rel_key)

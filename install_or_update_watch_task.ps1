@@ -1,19 +1,19 @@
 param(
-    [string]$TaskName = 'ZoteroPdfMarkdownWatch'
+    [string]$TaskName = 'PaperAgentWatch'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
-$SupervisorPath = Join-Path $ProjectRoot 'zotero_pdf_watch_supervisor.ps1'
+$SupervisorPath = Join-Path $ProjectRoot 'paper_agent_watch_supervisor.ps1'
 
 if (-not (Test-Path -LiteralPath $SupervisorPath)) {
     throw "Supervisor script not found: $SupervisorPath"
 }
 
-function Stop-ZoteroWatchProcesses {
+function Stop-PaperAgentWatchProcesses {
     $patterns = @(
-        'zotero_pdf_watch_supervisor.ps1',
+        'paper_agent_watch_supervisor.ps1',
         'watch_folder_resilient.py'
     )
 
@@ -48,7 +48,7 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     }
 }
 
-Stop-ZoteroWatchProcesses
+Stop-PaperAgentWatchProcesses
 
 $action = New-ScheduledTaskAction `
     -Execute 'powershell.exe' `

@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from pdf_to_markdown.common import (
+from paper_to_markdown.common import (
     bundle_dir_for_pdf,
     cleanup_marker_raw_root,
     find_all_pdfs,
@@ -12,7 +12,7 @@ from pdf_to_markdown.common import (
     supporting_markdown_name,
     supporting_source_info,
 )
-from pdf_to_markdown.pipeline import convert_one_pdf
+from paper_to_markdown.pipeline import convert_one_pdf
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default="pdf_to_markdown/settings.json",
+        default="paper_to_markdown/settings.json",
         help="Path to settings.json.",
     )
     parser.add_argument(
@@ -41,18 +41,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     config = load_config(args.config)
-    logger = setup_logger(config, logger_name="pdf_to_markdown.backfill")
-    source_dir = Path(config["source_dir"])
+    logger = setup_logger(config, logger_name="paper_to_markdown.backfill")
+    input_root = Path(config["input_root"])
 
     try:
         missing: list[tuple[Path, Path]] = []
-        for pdf_path in find_all_pdfs(source_dir):
+        for pdf_path in find_all_pdfs(input_root):
             supporting_info = supporting_source_info(pdf_path)
             if not supporting_info:
                 continue
 
             primary_pdf, supporting_index = supporting_info
-            target_md = bundle_dir_for_pdf(primary_pdf, source_dir, config) / supporting_markdown_name(supporting_index)
+            target_md = bundle_dir_for_pdf(primary_pdf, input_root, config) / supporting_markdown_name(supporting_index)
             if not target_md.exists():
                 missing.append((pdf_path, target_md))
 

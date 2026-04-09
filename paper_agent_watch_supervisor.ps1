@@ -23,7 +23,7 @@ function Read-Config {
 }
 
 $ProjectRoot = Get-ScriptRoot
-$WorkflowRoot = Join-Path $ProjectRoot 'pdf_to_markdown'
+$WorkflowRoot = Join-Path $ProjectRoot 'paper_to_markdown'
 $ConfigPath = Join-Path $WorkflowRoot 'settings.json'
 
 if (-not (Test-Path -LiteralPath $ConfigPath)) {
@@ -31,7 +31,13 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
 }
 
 $Config = Read-Config -Path $ConfigPath
-$PythonwPath = [string]$Config.pythonw_path
+$PythonPath = ''
+if ($Config.PSObject.Properties.Name -contains 'pythonw_path') {
+    $PythonPath = [string]$Config.pythonw_path
+}
+if ([string]::IsNullOrWhiteSpace($PythonPath) -and $Config.PSObject.Properties.Name -contains 'python_path') {
+    $PythonPath = [string]$Config.python_path
+}
 $WatchScriptPath = Join-Path $WorkflowRoot 'watch_folder_resilient.py'
 $WorkingDirectory = $WorkflowRoot
 $ModelCacheDir = ''
@@ -39,10 +45,10 @@ if ($Config.PSObject.Properties.Name -contains 'model_cache_dir') {
     $ModelCacheDir = [string]$Config.model_cache_dir
 }
 
-$LogRoot = Join-Path ([string]$Config.work_root) 'logs'
-$SupervisorLogPath = Join-Path $LogRoot 'zotero_pdf_watch_supervisor.log'
-$WatcherStatePath = Join-Path $LogRoot 'zotero_pdf_watch_supervisor_state.json'
-$MutexName = 'Global\ZoteroPdfMarkdownWatchSupervisor'
+$LogRoot = Join-Path ([string]$Config.output_root) 'logs'
+$SupervisorLogPath = Join-Path $LogRoot 'paper_agent_watch_supervisor.log'
+$WatcherStatePath = Join-Path $LogRoot 'paper_agent_watch_supervisor_state.json'
+$MutexName = 'Global\PaperAgentWatchSupervisor'
 $WatcherCheckIntervalSeconds = 15
 
 function Write-Log {
@@ -56,7 +62,7 @@ function Write-Log {
 }
 
 function Test-RequiredPaths {
-    $required = @($PythonwPath, $WorkflowRoot, $WatchScriptPath, $ConfigPath)
+    $required = @($PythonPath, $WorkflowRoot, $WatchScriptPath, $ConfigPath)
     foreach ($path in $required) {
         if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) {
             throw "Missing required path: $path"
@@ -99,8 +105,8 @@ function Start-Watcher {
         return $existing
     }
 
-    Write-Log "Starting pdf watch process from $WatchScriptPath."
-    $process = Start-Process -FilePath $PythonwPath `
+    Write-Log "Starting paper watch process from $WatchScriptPath."
+    $process = Start-Process -FilePath $PythonPath `
         -ArgumentList @($WatchScriptPath, '--config', $ConfigPath) `
         -WorkingDirectory $WorkingDirectory `
         -PassThru
@@ -111,7 +117,7 @@ function Start-Watcher {
     }
 
     Save-WatcherState -Process $process
-    Write-Log "Started pdf watch process with PID $($process.Id)."
+    Write-Log "Started paper watch process with PID $($process.Id)."
     return $process
 }
 
