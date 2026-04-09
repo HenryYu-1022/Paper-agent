@@ -1,5 +1,7 @@
 # Zotero Google Drive PDF to Markdown
 
+中文说明见 [README.zh-CN.markdown](README.zh-CN.markdown)。
+
 Automatically convert Zotero PDF papers stored on Google Drive into Markdown using [Marker](https://github.com/VikParuchuri/marker). Designed for a cloud-native workflow where both source PDFs and generated Markdown stay on Google Drive, enabling use with Obsidian or other Markdown-based tools.
 
 ## Features
@@ -352,6 +354,7 @@ zotero-gdrive-markdown-project/
   requirements.txt                   # Python dependencies
   .gitignore
   LICENSE
+  README.zh-CN.markdown
   README.markdown
 ```
 
