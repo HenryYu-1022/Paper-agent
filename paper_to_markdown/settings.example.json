@@ -23,7 +23,10 @@
     "watch_stable_checks": "处理前连续检查文件稳定的次数。",
     "watch_stable_interval_seconds": "每次稳定性检查之间的间隔秒数。",
     "watch_rescan_interval_seconds": "定期全量重扫间隔；0 表示关闭定期重扫。",
-    "watch_initial_scan": "watcher 启动时是否先把现有未处理 PDF 入队。"
+    "watch_initial_scan": "watcher 启动时是否先把现有未处理 PDF 入队。",
+    "zotero_db_path": "可选。Zotero 数据库路径（zotero.sqlite），配置后启用 collection 层级镜像功能。",
+    "collection_mirror_mode": "可选。镜像模式：symlink（默认，节约空间）或 copy（Windows 无管理员权限时使用）。",
+    "zotero_sync_interval_seconds": "可选。sync daemon 轮询 Zotero 数据库的间隔秒数，默认 60。"
   },
   "input_root": "/Users/yourname/Documents/paper-library/input",
   "output_root": "/Users/yourname/Documents/paper-library/output",
@@ -45,5 +48,8 @@
   "watch_stable_checks": 3,
   "watch_stable_interval_seconds": 2,
   "watch_rescan_interval_seconds": 0,
-  "watch_initial_scan": false
+  "watch_initial_scan": false,
+  "zotero_db_path": "",
+  "collection_mirror_mode": "symlink",
+  "zotero_sync_interval_seconds": 60
 }

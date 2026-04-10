@@ -58,6 +58,13 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
     else:
         config.pop("marker_repo_root", None)
 
+    # Optional: Zotero database path for collection hierarchy mirroring
+    zotero_db_path = str(config.get("zotero_db_path", "")).strip()
+    if zotero_db_path:
+        config["zotero_db_path"] = _resolve_path_value(zotero_db_path)
+    else:
+        config.pop("zotero_db_path", None)
+
     return config
 
 
@@ -91,6 +98,10 @@ def failed_report_path(config: dict[str, Any]) -> Path:
 
 def manifest_path(config: dict[str, Any]) -> Path:
     return state_root(config) / "manifest.json"
+
+
+def collection_state_path(config: dict[str, Any]) -> Path:
+    return state_root(config) / "collection_state.json"
 
 
 def to_posix_path_str(path: Path | str) -> str:
@@ -351,3 +362,43 @@ def write_frontmatter_markdown(markdown_path: Path, metadata: dict[str, Any]) ->
         frontmatter + "## Full Text\n\n" + body.lstrip(),
         encoding="utf-8",
     )
+
+
+def parse_frontmatter(markdown_path: Path) -> tuple[dict[str, Any], str]:
+    """Parse YAML frontmatter and body from a Markdown file.
+
+    Returns ``(metadata_dict, body_text)``.  If no frontmatter is found,
+    *metadata_dict* is empty and *body_text* is the full file content.
+    """
+    import yaml
+
+    text = markdown_path.read_text(encoding="utf-8", errors="replace").lstrip("\ufeff")
+    if not text.startswith("---"):
+        return {}, text
+
+    end = text.find("\n---", 3)
+    if end == -1:
+        return {}, text
+
+    yaml_block = text[3:end].strip()
+    body = text[end + 4:].lstrip("\n")
+    try:
+        metadata = yaml.safe_load(yaml_block) or {}
+    except yaml.YAMLError:
+        metadata = {}
+    return metadata, body
+
+
+def update_frontmatter_fields(
+    markdown_path: Path,
+    updates: dict[str, Any],
+) -> None:
+    """Update specific fields in the YAML frontmatter of a Markdown file.
+
+    Only the given *updates* keys are changed; the remaining metadata and
+    the body text are preserved exactly.
+    """
+    metadata, body = parse_frontmatter(markdown_path)
+    metadata.update(updates)
+    frontmatter = build_frontmatter(metadata)
+    markdown_path.write_text(frontmatter + body, encoding="utf-8")

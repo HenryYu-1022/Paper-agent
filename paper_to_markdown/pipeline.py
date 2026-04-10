@@ -21,6 +21,7 @@ try:
         load_config,
         manifest_path,
         markdown_root,
+        pdf_bundle_relpath,
         pdf_fingerprint,
         raw_dir_for_pdf,
         raw_root,
@@ -31,9 +32,11 @@ try:
         supporting_markdown_name,
         supporting_source_info,
         to_posix_path_str,
+        update_frontmatter_fields,
         utc_now_iso,
         write_frontmatter_markdown,
     )
+    from .zotero_collections import ZoteroCollectionMap
 except ImportError:
     from common import (
         bundle_dir_for_pdf,
@@ -47,6 +50,7 @@ except ImportError:
         load_config,
         manifest_path,
         markdown_root,
+        pdf_bundle_relpath,
         pdf_fingerprint,
         raw_dir_for_pdf,
         raw_root,
@@ -57,9 +61,11 @@ except ImportError:
         supporting_markdown_name,
         supporting_source_info,
         to_posix_path_str,
+        update_frontmatter_fields,
         utc_now_iso,
         write_frontmatter_markdown,
     )
+    from zotero_collections import ZoteroCollectionMap
 
 SUPPORTING_CONTENT_MARKER = "supportinginformation"
 MAX_CONVERSION_RETRIES = 3
@@ -278,6 +284,12 @@ def delete_pdf_artifacts(
     r_root = raw_root(config)
     deleted_paths: list[str] = []
 
+    # Remove collection mirror symlinks/copies first
+    mirror_paths = entry.get("mirror_paths", [])
+    if mirror_paths:
+        remove_collection_mirrors(mirror_paths, config, logger)
+        deleted_paths.extend(mirror_paths)
+
     raw_dir = entry.get("raw_output_dir")
     if raw_dir:
         raw_dir_path = Path(raw_dir)
@@ -310,10 +322,19 @@ def delete_pdf_artifacts(
     return {"rel_key": rel_key, "deleted": True, "paths": deleted_paths}
 
 
+def _get_zotero_map(config: dict[str, Any]) -> ZoteroCollectionMap | None:
+    """Return a *ZoteroCollectionMap* if ``zotero_db_path`` is configured."""
+    db_path = config.get("zotero_db_path")
+    if not db_path:
+        return None
+    return ZoteroCollectionMap(db_path)
+
+
 def build_conversion_metadata(
     pdf_path: Path,
     input_root: Path,
     config: dict[str, Any],
+    zotero_map: ZoteroCollectionMap | None = None,
 ) -> dict[str, Any]:
     rel_pdf = relative_pdf_path(pdf_path, input_root)
     metadata = {
@@ -327,6 +348,12 @@ def build_conversion_metadata(
     }
     if config.get("compute_sha256", False):
         metadata["source_sha256"] = pdf_fingerprint(pdf_path, use_sha256=True)["sha256"]
+
+    # Zotero collection hierarchy
+    if zotero_map is not None:
+        collections = zotero_map.get_collections_for_pdf(pdf_path.name)
+        if collections:
+            metadata["zotero_collections"] = collections
     return metadata
 
 
@@ -399,13 +426,101 @@ def copy_supporting_assets(copy_root: Path, main_raw_md: Path, target_dir: Path)
         shutil.copy2(path, destination)
 
 
+def create_collection_mirrors(
+    bundle_dir: Path,
+    pdf_path: Path,
+    input_root: Path,
+    config: dict[str, Any],
+    zotero_map: ZoteroCollectionMap | None,
+    logger,
+) -> list[str]:
+    """Create symlink mirrors for each extra Zotero collection the PDF belongs to.
+
+    Returns a list of mirror directory paths (as posix strings) that were created.
+    The bundle's own physical location is excluded from mirroring.
+    """
+    if zotero_map is None:
+        return []
+
+    collections = zotero_map.get_collections_for_pdf(pdf_path.name)
+    if not collections:
+        return []
+
+    md_root = markdown_root(config)
+    # The physical collection path for this PDF (derived from input_root structure)
+    physical_relpath = pdf_bundle_relpath(relative_pdf_path(pdf_path, input_root))
+    physical_collection = str(physical_relpath.parent).replace("\\", "/")
+
+    mirror_mode = config.get("collection_mirror_mode", "symlink")
+    mirror_paths: list[str] = []
+
+    for col_path in collections:
+        # Skip if this collection matches the physical location
+        if col_path == physical_collection:
+            continue
+
+        mirror_dir = md_root / col_path / pdf_path.stem
+        if mirror_dir.exists():
+            # Already exists (could be from a previous run)
+            if mirror_dir.is_symlink() or mirror_dir.is_dir():
+                continue
+
+        mirror_dir.parent.mkdir(parents=True, exist_ok=True)
+
+        if mirror_mode == "symlink":
+            try:
+                mirror_dir.symlink_to(bundle_dir)
+                logger.info("Created mirror symlink: %s -> %s", mirror_dir, bundle_dir)
+            except OSError as exc:
+                logger.warning("Failed to create symlink %s: %s; falling back to copy", mirror_dir, exc)
+                shutil.copytree(bundle_dir, mirror_dir, dirs_exist_ok=True)
+        else:
+            shutil.copytree(bundle_dir, mirror_dir, dirs_exist_ok=True)
+            logger.info("Created mirror copy: %s", mirror_dir)
+
+        mirror_paths.append(to_posix_path_str(mirror_dir))
+
+    return mirror_paths
+
+
+def remove_collection_mirrors(
+    mirror_paths: list[str],
+    config: dict[str, Any],
+    logger,
+) -> None:
+    """Remove symlink mirrors (or copied directories) listed in *mirror_paths*."""
+    md_root = markdown_root(config)
+    for mp in mirror_paths:
+        path = Path(mp)
+        if not path.exists() and not path.is_symlink():
+            continue
+        if not is_relative_to(path, md_root):
+            logger.warning("Mirror path outside markdown root, skipping: %s", path)
+            continue
+        if path.is_symlink():
+            path.unlink()
+            logger.info("Removed mirror symlink: %s", path)
+        elif path.is_dir():
+            safe_rmtree(path, md_root)
+            logger.info("Removed mirror directory: %s", path)
+
+        # Clean up empty parent directories up to markdown_root
+        parent = path.parent
+        while parent != md_root and parent.exists() and not any(parent.iterdir()):
+            parent.rmdir()
+            logger.info("Removed empty directory: %s", parent)
+            parent = parent.parent
+
+
 def materialize_primary_bundle(
     config: dict[str, Any],
     pdf_path: Path,
     input_root: Path,
     copy_root: Path,
     main_raw_md: Path,
-) -> Path:
+    zotero_map: ZoteroCollectionMap | None = None,
+    logger=None,
+) -> tuple[Path, list[str]]:
     bundle_dir = bundle_dir_for_pdf(pdf_path, input_root, config)
     remove_primary_bundle_content(bundle_dir, markdown_root(config))
 
@@ -421,10 +536,17 @@ def materialize_primary_bundle(
         main_bundle_md.rename(desired_md_path)
         main_bundle_md = desired_md_path
 
-    metadata = build_conversion_metadata(pdf_path, input_root, config)
+    metadata = build_conversion_metadata(pdf_path, input_root, config, zotero_map=zotero_map)
     metadata["document_role"] = "main"
     write_frontmatter_markdown(main_bundle_md, metadata)
-    return main_bundle_md
+
+    # Create symlink mirrors for additional Zotero collections
+    _logger = logger or __import__("logging").getLogger("paper_to_markdown")
+    mirror_paths = create_collection_mirrors(
+        bundle_dir, pdf_path, input_root, config, zotero_map, _logger,
+    )
+
+    return main_bundle_md, mirror_paths
 
 
 def materialize_supporting_bundle(
@@ -435,6 +557,7 @@ def materialize_supporting_bundle(
     main_raw_md: Path,
     primary_pdf: Path,
     supporting_index: int,
+    zotero_map: ZoteroCollectionMap | None = None,
 ) -> Path:
     bundle_dir = bundle_dir_for_pdf(primary_pdf, input_root, config)
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -455,7 +578,7 @@ def materialize_supporting_bundle(
     )
     target_md.write_text(supporting_text, encoding="utf-8")
 
-    metadata = build_conversion_metadata(pdf_path, input_root, config)
+    metadata = build_conversion_metadata(pdf_path, input_root, config, zotero_map=zotero_map)
     metadata["document_role"] = "supporting"
     metadata["supporting_index"] = supporting_index
     metadata["primary_source_pdf"] = to_posix_path_str(primary_pdf)
@@ -470,13 +593,17 @@ def materialize_final_bundle(
     pdf_path: Path,
     input_root: Path,
     raw_output_dir: Path,
-) -> Path:
+    logger=None,
+) -> tuple[Path, list[str]]:
     copy_root = detect_marker_content_root(raw_output_dir)
     main_raw_md = find_main_markdown(copy_root)
     supporting_info = supporting_source_info(pdf_path)
+
+    zotero_map = _get_zotero_map(config)
+
     if supporting_info and looks_like_supporting_markdown(main_raw_md):
         primary_pdf, supporting_index = supporting_info
-        return materialize_supporting_bundle(
+        md_path = materialize_supporting_bundle(
             config,
             pdf_path=pdf_path,
             input_root=input_root,
@@ -484,7 +611,9 @@ def materialize_final_bundle(
             main_raw_md=main_raw_md,
             primary_pdf=primary_pdf,
             supporting_index=supporting_index,
+            zotero_map=zotero_map,
         )
+        return md_path, []
 
     return materialize_primary_bundle(
         config,
@@ -492,6 +621,8 @@ def materialize_final_bundle(
         input_root=input_root,
         copy_root=copy_root,
         main_raw_md=main_raw_md,
+        zotero_map=zotero_map,
+        logger=logger,
     )
 
 
@@ -527,7 +658,9 @@ def convert_one_pdf(
 
     try:
         run_marker(config, pdf, raw_output_dir, logger)
-        final_md = materialize_final_bundle(config, pdf, input_root, raw_output_dir)
+        final_md, mirror_paths = materialize_final_bundle(
+            config, pdf, input_root, raw_output_dir, logger=logger,
+        )
         manifest.mark_success(
             rel_key=rel_key,
             fingerprint=fingerprint,
@@ -538,6 +671,7 @@ def convert_one_pdf(
                 "torch_device": config.get("torch_device", "cuda"),
                 "force_ocr": bool(config.get("force_ocr", False)),
                 "markdown_bundle_dir": str(final_md.parent),
+                "mirror_paths": mirror_paths,
             },
         )
         logger.info("Conversion completed: %s -> %s", rel_key, final_md)
