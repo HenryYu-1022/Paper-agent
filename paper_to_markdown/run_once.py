@@ -6,10 +6,10 @@ from pathlib import Path
 
 try:
     from .common import cleanup_marker_raw_root, load_config, manifest_path, setup_logger
-    from .pipeline import ManifestStore, convert_all_pdfs, convert_one_pdf, delete_pdf_artifacts
+    from .pipeline import ManifestStore, convert_all_pdfs, convert_one_pdf_with_retries, delete_pdf_artifacts
 except ImportError:
     from common import cleanup_marker_raw_root, load_config, manifest_path, setup_logger
-    from pipeline import ManifestStore, convert_all_pdfs, convert_one_pdf, delete_pdf_artifacts
+    from pipeline import ManifestStore, convert_all_pdfs, convert_one_pdf_with_retries, delete_pdf_artifacts
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -81,7 +81,9 @@ def main() -> None:
             return
 
         if args.path:
-            result = convert_one_pdf(args.path, config_path=args.config, force_reconvert=args.force)
+            result = convert_one_pdf_with_retries(
+                args.path, config_path=args.config, force_reconvert=args.force,
+            )
             print(result if result else "Skipped")
             return
 

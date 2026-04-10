@@ -72,8 +72,7 @@ Copy-Item paper_to_markdown\settings.example.json paper_to_markdown\settings.jso
 
 ```jsonc
 {
-  "_comment_01": "这是标准 JSON，不能写 // 注释；模板里用 _comment_* 字段放说明，程序会忽略它们。",
-  "_comment_02": "macOS 只需要 python_path；pythonw_path 仅 Windows 使用。",
+  "_comment_01": "macOS 只需要 python_path；pythonw_path 仅 Windows 使用。",
   "input_root": "/Users/yourname/Documents/paper-library/input",
   "output_root": "/Users/yourname/Documents/paper-library/output",
   "python_path": "/opt/homebrew/bin/python3",
@@ -283,6 +282,16 @@ supporting PDF 还会写入 `supporting_index` 以及主论文相关字段。
 像 `_1`、`_2` 这样的数字后缀仍然会用于排序和命名，但不再是识别 supporting 的前提条件。
 
 否则它会被当作独立论文处理。
+
+## 失败自动重试
+
+Marker 有时会因为 GPU 显存压力、中间状态异常等瞬态原因崩溃或失败。为此，`paper-agent` 会对失败的转换自动重试最多 3 次：
+
+- **批量模式（`run_once.py`）**：第一遍跑完后，所有失败的 PDF 会被自动重试最多 3 次。最终的 `failed_pdfs.txt` 报告只包含重试 3 次仍然失败的 PDF。
+- **单文件模式（`run_once.py --path`）**：同样应用 3 次重试逻辑。
+- **监听模式（`watch_folder_resilient.py`）**：每个文件系统事件触发的 PDF 转换也会在失败时重试最多 3 次，才会被标记为失败。
+
+重试次数由 `pipeline.py` 中的 `MAX_CONVERSION_RETRIES` 控制（默认值：3）。
 
 ## 配置项说明
 

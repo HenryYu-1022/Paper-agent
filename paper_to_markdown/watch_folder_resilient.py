@@ -21,7 +21,7 @@ try:
         relative_pdf_path,
         setup_logger,
     )
-    from .pipeline import ManifestStore, convert_one_pdf, delete_pdf_artifacts
+    from .pipeline import ManifestStore, convert_one_pdf_with_retries, delete_pdf_artifacts
 except ImportError:
     from common import (
         cleanup_marker_raw_root,
@@ -35,7 +35,7 @@ except ImportError:
         relative_pdf_path,
         setup_logger,
     )
-    from pipeline import ManifestStore, convert_one_pdf, delete_pdf_artifacts
+    from pipeline import ManifestStore, convert_one_pdf_with_retries, delete_pdf_artifacts
 
 
 def is_pdf_path(path: str) -> bool:
@@ -178,9 +178,11 @@ class PdfEventHandler(FileSystemEventHandler):
                     continue
 
                 try:
-                    convert_one_pdf(pdf_path, config_path=self.config_path, force_reconvert=False)
+                    convert_one_pdf_with_retries(
+                        pdf_path, config_path=self.config_path, force_reconvert=False,
+                    )
                 except Exception:
-                    self.logger.exception("Watcher conversion failed: %s", pdf_path)
+                    self.logger.exception("Watcher conversion failed after all retries: %s", pdf_path)
                 finally:
                     with self.lock:
                         self.in_progress.discard(pdf_path)

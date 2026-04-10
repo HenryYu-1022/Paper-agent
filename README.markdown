@@ -72,9 +72,11 @@ Example:
 
 ```jsonc
 {
+  "_comment_01": "macOS only needs python_path; pythonw_path is only used on Windows.",
   "input_root": "/Users/yourname/Documents/paper-library/input",
   "output_root": "/Users/yourname/Documents/paper-library/output",
   "python_path": "/opt/homebrew/bin/python3",
+  "pythonw_path": "",
   "model_cache_dir": "/Users/yourname/.cache/marker/datalab_model_cache",
   "marker_cli": "/absolute/path/to/marker_single",
   "hf_home": "/Users/yourname/.cache/huggingface",
@@ -86,6 +88,8 @@ Notes:
 
 - `marker_cli` can be an absolute path or just `marker_single`
 - `python_path` should be absolute, especially for background startup
+- macOS LaunchAgent reads `python_path` and does not read `pythonw_path`
+- `pythonw_path` is only for Windows background scheduled tasks; on macOS you can leave it empty or omit it
 - `torch_device` is usually `cuda` on NVIDIA Windows/Linux, `mps` on Apple Silicon, and `cpu` when no accelerator is available
 
 ### 2. Download Marker Models Once
@@ -279,6 +283,16 @@ Numeric suffixes such as `_1` and `_2` are still supported for indexing, but the
 
 Otherwise it is treated as a standalone paper.
 
+## Automatic Retry on Failure
+
+Marker occasionally crashes or fails due to transient issues such as GPU memory pressure or corrupted intermediate state. To handle this, `paper-agent` automatically retries failed conversions up to 3 times:
+
+- **Batch mode (`run_once.py`)**: After the first pass, any PDFs that failed are retried up to 3 additional times. The final `failed_pdfs.txt` report only lists PDFs that still fail after all retries.
+- **Single-file mode (`run_once.py --path`)**: The same 3-retry logic applies.
+- **Watch mode (`watch_folder_resilient.py`)**: Each PDF that triggers a filesystem event is converted with up to 3 retry attempts before being marked as failed.
+
+The retry count is controlled by `MAX_CONVERSION_RETRIES` in `pipeline.py` (default: 3).
+
 ## Configuration Reference
 
 Config file: `paper_to_markdown/settings.json`
@@ -289,8 +303,8 @@ Config file: `paper_to_markdown/settings.json`
 | `output_root` | Yes | -- | Root directory for markdown, state, logs, and raw output |
 | `marker_cli` | Yes | -- | Marker command or absolute path, such as `marker_single` or `.venv/bin/marker_single` |
 | `hf_home` | Yes | -- | Hugging Face cache directory |
-| `python_path` | No | -- | Absolute Python path used by macOS LaunchAgent and as a Windows fallback |
-| `pythonw_path` | No | -- | Preferred hidden-background Python path for Windows scheduled tasks |
+| `python_path` | No | -- | Absolute Python path actually used by macOS LaunchAgent, and also available as a Windows fallback |
+| `pythonw_path` | No | -- | Preferred hidden-background `pythonw.exe` path for Windows scheduled tasks only; macOS does not need or read this field |
 | `marker_repo_root` | No | -- | Optional Marker working directory, only needed for special local setups |
 | `model_cache_dir` | No | -- | Exported as `MODEL_CACHE_DIR` by the supervisor scripts |
 | `torch_device` | No | `cuda` | `cuda`, `mps`, or `cpu` |
@@ -335,9 +349,11 @@ paper-agent/
 ## Notes
 
 - `settings.json` is machine-specific and gitignored
+- The `_comment_*` fields at the top of `settings.example.json` are human-readable notes and do not affect runtime behavior
 - `paper-agent` works with local folders and does not require Google Drive
 - If you use `zotero-attanger`, point `input_root` at its exported PDF tree
-- macOS LaunchAgents do not inherit your interactive shell PATH, so `python_path` should be absolute
+- macOS LaunchAgents do not inherit your interactive shell PATH, and the scripts only read `python_path`, so that field should be absolute
+- Windows background tasks prefer `pythonw_path`; if it is missing, they fall back to `python_path`
 
 ## License
 

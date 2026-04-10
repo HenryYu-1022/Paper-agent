@@ -62,6 +62,7 @@ except ImportError:
     )
 
 SUPPORTING_CONTENT_MARKER = "supportinginformation"
+MAX_CONVERSION_RETRIES = 3
 
 
 class ManifestStore:
@@ -547,6 +548,39 @@ def convert_one_pdf(
         raise
 
 
+def convert_one_pdf_with_retries(
+    pdf_path: str | Path,
+    config_path: str | None = None,
+    force_reconvert: bool = False,
+    max_retries: int = MAX_CONVERSION_RETRIES,
+) -> Path | None:
+    """Try to convert a single PDF, retrying up to *max_retries* times on failure.
+
+    Returns the output markdown path on success, or raises the last exception
+    after all retries are exhausted.
+    """
+    config = load_config(config_path)
+    logger = setup_logger(config)
+    last_exc: Exception | None = None
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            return convert_one_pdf(
+                pdf_path, config_path=config_path, force_reconvert=force_reconvert,
+            )
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "Conversion attempt %s/%s failed for %s: %s",
+                attempt, max_retries, pdf_path, exc,
+            )
+            if attempt < max_retries:
+                logger.info("Retrying %s (attempt %s/%s) …", pdf_path, attempt + 1, max_retries)
+
+    # All retries exhausted – re-raise the last exception
+    raise last_exc  # type: ignore[misc]
+
+
 def convert_all_pdfs(
     config_path: str | None = None,
     force_reconvert: bool = False,
@@ -568,11 +602,11 @@ def convert_all_pdfs(
 
     converted = 0
     skipped = 0
-    failed = 0
+    failed_pdfs: list[Path] = []
 
     manifest = ManifestStore(manifest_path(config))
-    write_failed_pdf_report(config, manifest)
 
+    # ── First pass ──────────────────────────────────────────────────────
     for pdf in pdfs:
         rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
         fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", False))
@@ -585,13 +619,52 @@ def convert_all_pdfs(
             convert_one_pdf(pdf, config_path=config_path, force_reconvert=True)
             converted += 1
             manifest = ManifestStore(manifest_path(config))
-            write_failed_pdf_report(config, manifest)
         except Exception:
-            failed += 1
+            failed_pdfs.append(pdf)
             manifest = ManifestStore(manifest_path(config))
-            write_failed_pdf_report(config, manifest)
+
+    # ── Retry pass (up to MAX_CONVERSION_RETRIES rounds) ────────────────
+    if failed_pdfs:
+        logger.info(
+            "First pass complete. %s PDF(s) failed, starting retry (max %s attempts per PDF) …",
+            len(failed_pdfs), MAX_CONVERSION_RETRIES,
+        )
+
+    still_failed: list[Path] = []
+    for pdf in failed_pdfs:
+        success = False
+        for attempt in range(1, MAX_CONVERSION_RETRIES + 1):
+            try:
+                logger.info(
+                    "Retry attempt %s/%s for: %s", attempt, MAX_CONVERSION_RETRIES, pdf,
+                )
+                convert_one_pdf(pdf, config_path=config_path, force_reconvert=True)
+                converted += 1
+                success = True
+                manifest = ManifestStore(manifest_path(config))
+                break
+            except Exception:
+                logger.warning(
+                    "Retry attempt %s/%s failed for: %s", attempt, MAX_CONVERSION_RETRIES, pdf,
+                )
+                manifest = ManifestStore(manifest_path(config))
+
+        if not success:
+            still_failed.append(pdf)
+
+    failed = len(still_failed)
+
+    # ── Write final report (only truly persistent failures) ─────────────
+    manifest = ManifestStore(manifest_path(config))
+    write_failed_pdf_report(config, manifest)
 
     summary = {"converted": converted, "skipped": skipped, "failed": failed}
+    if still_failed:
+        logger.warning(
+            "PDFs that failed after all retries (%s): %s",
+            MAX_CONVERSION_RETRIES,
+            [str(p) for p in still_failed],
+        )
     logger.info(
         "Batch finished: converted=%s skipped=%s failed=%s",
         converted,
