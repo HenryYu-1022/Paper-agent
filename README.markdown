@@ -22,44 +22,53 @@ If you are a researcher or knowledge worker who uses **Zotero** to manage your l
 
 **Convert your entire Zotero PDF library into a Markdown corpus, then let AI agents read it.**
 
+There are two separate data flows — PDF files from disk, and collection hierarchy from Zotero's database:
+
 ```text
-   Zotero Library          Structured PDFs           Markdown Library          AI Agent Access
- ┌──────────────┐       ┌──────────────────┐       ┌─────────────────┐       ┌─────────────────┐
- │  Papers in   │       │  PDFs organized  │       │  .md files with │       │  Codex / Claude │
- │  collections │──────▶│  by collection   │──────▶│  YAML front-    │──────▶│  Code search,   │
- │  & folders   │       │  hierarchy       │       │  matter + text  │       │  summarize,     │
- └──────────────┘       └──────────────────┘       └─────────────────┘       │  integrate      │
-                 zotero-attanger             paper-agent                     └─────────────────┘
-                  (migrate &                 (PDF → Markdown                         │
-                   export)                    conversion)                            ▼
-                                                                            ┌─────────────────┐
-                                                                            │  Sync to your   │
-                                                                            │  personal note  │
-                                                                            │  library        │
-                                                                            └─────────────────┘
+ ┌──────────────────┐
+ │  zotero.sqlite   │─── collection hierarchy ──┐
+ │  (Zotero DB)     │                            │
+ └──────────────────┘                            ▼
+                                          ┌─────────────────┐       ┌─────────────────┐
+ ┌──────────────────┐   PDF files         │  .md files with │       │  Codex / Claude │
+ │  PDF directory   │─────────────────────▶│  YAML front-    │──────▶│  Code search,   │
+ │  (from attanger  │     paper-agent     │  matter + text  │       │  summarize,     │
+ │   or any source) │   (PDF → Markdown   │  + collection   │       │  integrate      │
+ └──────────────────┘    + collection     │  tags & mirrors │       └─────────────────┘
+                          mirroring)      └─────────────────┘               │
+                                                                            ▼
+                                                                    ┌─────────────────┐
+                                                                    │  Sync to your   │
+                                                                    │  personal note  │
+                                                                    │  library        │
+                                                                    └─────────────────┘
 ```
+
+**Key distinction:** `zotero-attanger` exports PDFs to disk but may only store each file in one folder to save space. `paper-agent` reads the **actual Zotero collection hierarchy directly from `zotero.sqlite`**, so even if a paper belongs to 5 collections, it knows — and creates symlink mirrors in the Markdown library for every one of them.
 
 The workflow is:
 
-1. **Organize & export** — Use [zotero-attanger](https://github.com/HenryYu-1022/zotero-attanger) (or any similar tool) to migrate and export your Zotero attachments into a clean folder hierarchy that mirrors your Zotero collections. This step also prepares the file structure for YAML metadata enrichment.
+1. **Sync PDFs via Google Drive** — Use [zotero-attanger](https://github.com/HenryYu-1022/zotero-attanger) to sync your Zotero attachments to Google Drive, making them accessible across multiple devices. `zotero-attanger` moves the PDFs out of Zotero's opaque `storage/` directory into a Google Drive folder, enabling multi-device access. To save space, each PDF is stored in only one folder — that is fine, because `paper-agent` reads the full collection hierarchy directly from `zotero.sqlite`.
 
-2. **Convert** — Point `paper-agent` at the exported PDF directory. It batch-converts every PDF to Markdown using [Marker](https://github.com/datalab-to/marker), preserves the folder structure, and stamps each file with YAML frontmatter (source path, conversion timestamp, device, document role, etc.).
+2. **Convert & mirror** — Point `paper-agent` at the synced PDF directory **and** at your `zotero.sqlite`. It converts every PDF to Markdown using [Marker](https://github.com/datalab-to/marker), reads the Zotero database to discover all collections each paper belongs to, writes `zotero_collections` tags into YAML frontmatter, and creates **symlink mirrors** so the Markdown library reflects the full Zotero hierarchy.
 
 3. **Query with AI** — Open the resulting Markdown library as a workspace in Codex or Claude Code. Now you can ask questions across your entire library: *"Which papers propose attention-based architectures for time-series forecasting?"*, *"Summarize the experimental setups used in all papers under my `Reinforcement Learning` collection"*, *"Compare the loss functions described in these three papers"*. The AI agent can read, grep, and cross-reference thousands of pages of full-text content in seconds.
 
-4. **Sync to your notes** — Because the output is plain Markdown with structured frontmatter, you can drop the library (or symlink it) into Obsidian, Logseq, or any Markdown-based note system. Your AI-generated insights and your personal annotations live in the same ecosystem.
+4. **Keep in sync** — Run the sync daemon (`sync_zotero_collections.py`) to continuously monitor your Zotero database. When you move papers between collections in Zotero, the Markdown library automatically updates — new symlinks appear, stale ones are removed, and frontmatter tags are refreshed.
 
-### Recommended: Using zotero-attanger for the Migration Step
+5. **Sync to your notes** — Because the output is plain Markdown with structured frontmatter, you can drop the library (or symlink it) into Obsidian, Logseq, or any Markdown-based note system. Your AI-generated insights and your personal annotations live in the same ecosystem.
 
-If your PDFs currently live inside Zotero's opaque storage (the `storage/` directory with random 8-character folder names), you need a way to export them into a human-readable, collection-based folder tree before `paper-agent` can process them.
+### Recommended: Using zotero-attanger for Multi-Device PDF Access
 
-[**zotero-attanger**](https://github.com/HenryYu-1022/zotero-attanger) is purpose-built for this. It reads your Zotero database, recreates the collection hierarchy as real folders, and moves or copies attachments into the matching directories. It can also inject or update YAML metadata in the exported filenames or sidecar files, providing a clean starting point for the YAML frontmatter that `paper-agent` later writes into the converted Markdown.
+[**zotero-attanger**](https://github.com/HenryYu-1022/zotero-attanger) syncs your Zotero attachments to Google Drive so you can access your PDFs from any device. It moves the files out of Zotero's opaque `storage/` directory (where each file lives in a randomly named 8-character folder like `N7SMB24A/`) into a normal, browsable directory on Google Drive.
 
-> **Tip:** If your PDFs are already organized in normal folders (not inside Zotero's storage), you do not need `zotero-attanger` — just point `paper-agent` directly at your PDF root.
+Because `zotero-attanger` stores each PDF in only one folder to save disk space, a paper that belongs to multiple collections in Zotero will only appear once on disk. **That is completely fine** — `paper-agent` reads the full collection hierarchy directly from `zotero.sqlite` and creates symlink mirrors for every collection.
+
+> **Tip:** If your PDFs are already in a normal folder (local or cloud-synced) and not inside Zotero's `storage/`, you do not need `zotero-attanger` — just point `paper-agent` directly at your PDF root.
 
 ---
 
-`paper-agent` uses [Marker](https://github.com/datalab-to/marker) to convert a directory tree of PDF papers into a Markdown library. It is designed for local folders, cloud-mounted folders, or exporter outputs such as `zotero-attanger` where PDFs are already arranged by collection or folder hierarchy.
+`paper-agent` uses [Marker](https://github.com/datalab-to/marker) to convert a directory tree of PDF papers into a Markdown library. When configured with a Zotero database path, it also reads the collection hierarchy directly from `zotero.sqlite` and creates symlink mirrors so the Markdown library matches your full Zotero organization.
 
 ## What It Does
 
@@ -93,21 +102,51 @@ Keep them separate. Do not point `output_root` inside `input_root`.
 
 ## Prerequisites
 
-1. Python 3.10+
-2. PyTorch for your platform from [pytorch.org](https://pytorch.org)
-3. Marker
+> **⚠️ Hardware requirement:** Marker uses deep learning models to convert PDFs. You need a machine with at least **8 GB RAM**. A dedicated **GPU is strongly recommended** — NVIDIA GPU with CUDA (Windows/Linux), or Apple Silicon with MPS (Mac). Without a GPU, conversion will be very slow (minutes per PDF instead of seconds). A CPU-only machine *can* work, but only for small libraries.
+
+Here is what you need to install, step by step:
+
+### 1. Install Python
+
+You need Python 3.10 or newer. If you are not sure whether you have it, open a terminal and run:
+
+```bash
+python3 --version
+```
+
+If the version is below 3.10, or the command is not found, download Python from [python.org](https://www.python.org/downloads/).
+
+### 2. Install PyTorch
+
+PyTorch is the deep learning framework that Marker runs on. Go to [pytorch.org](https://pytorch.org/get-started/locally/) and follow the instructions for your platform:
+
+- **Mac (Apple Silicon):** PyTorch works out of the box with MPS acceleration
+- **Windows/Linux with NVIDIA GPU:** Select the CUDA version that matches your driver
+- **No GPU:** Select CPU — it will work, just much slower
+
+### 3. Install Marker
 
 ```bash
 pip install marker-pdf
-# or, for extra document formats:
+# or, for extra document format support:
 pip install marker-pdf[full]
 ```
 
-4. Project dependencies
+### 4. Install project dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
+
+### 5. Download Marker models (first time only)
+
+The first time you run Marker, it downloads the required AI models (~1–2 GB). Run this once to cache them:
+
+```bash
+marker_single /path/to/any-test.pdf --output_dir /tmp/test_out --force_ocr
+```
+
+You can delete the test output afterward. The models are cached and will not need to be downloaded again.
 
 ## Quick Start
 
@@ -149,20 +188,14 @@ Notes:
 - `pythonw_path` is only for Windows background scheduled tasks; on macOS you can leave it empty or omit it
 - `torch_device` is usually `cuda` on NVIDIA Windows/Linux, `mps` on Apple Silicon, and `cpu` when no accelerator is available
 
-### 2. Download Marker Models Once
-
-```bash
-marker_single /path/to/test.pdf --output_dir /tmp/test_out --force_ocr
-```
-
-### 3. Run a Batch Conversion
+### 2. Run a Batch Conversion
 
 ```bash
 cd paper_to_markdown
 python3 run_once.py
 ```
 
-### 4. Start the Watcher
+### 3. Start the Watcher
 
 ```bash
 cd paper_to_markdown

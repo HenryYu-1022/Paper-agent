@@ -22,42 +22,51 @@ English version: [README.markdown](README.markdown)
 
 **把你整个 Zotero PDF 文献库转换成 Markdown 语料库，然后让 AI 代理来读。**
 
+这里有两条独立的数据流——PDF 文件来自磁盘，collection 层级来自 Zotero 数据库：
+
 ```text
-   Zotero 文献库         结构化 PDF 目录            Markdown 库             AI 代理访问
- ┌──────────────┐       ┌──────────────────┐       ┌─────────────────┐       ┌─────────────────┐
- │  按 collection│       │  按 collection   │       │  .md 文件 +     │       │  Codex / Claude │
- │  和目录组织的 │──────▶│  层级组织的 PDF  │──────▶│  YAML front-    │──────▶│  Code 搜索、    │
- │  论文        │       │  目录树          │       │  matter + 全文  │       │  总结、整合     │
- └──────────────┘       └──────────────────┘       └─────────────────┘       └─────────────────┘
-                 zotero-attanger             paper-agent                         │
-                  （迁移 &                   （PDF → Markdown                    ▼
-                   导出）                      转换）                    ┌─────────────────┐
-                                                                        │  同步到你的     │
-                                                                        │  个人笔记库     │
-                                                                        └─────────────────┘
+ ┌──────────────────┐
+ │  zotero.sqlite   │─── collection 层级 ───┐
+ │  (Zotero 数据库) │                        │
+ └──────────────────┘                        ▼
+                                      ┌─────────────────┐       ┌─────────────────┐
+ ┌──────────────────┐   PDF 文件      │  .md 文件 +     │       │  Codex / Claude │
+ │  PDF 目录        │────────────────▶│  YAML front-    │──────▶│  Code 搜索、    │
+ │  (来自 attanger  │   paper-agent  │  matter + 全文  │       │  总结、整合     │
+ │   或任何来源)    │  (PDF → MD     │  + collection   │       └─────────────────┘
+ └──────────────────┘   + collection │  标签 & 镜像)   │               │
+                         镜像)       └─────────────────┘               ▼
+                                                                ┌─────────────────┐
+                                                                │  同步到你的     │
+                                                                │  个人笔记库     │
+                                                                └─────────────────┘
 ```
+
+**关键区分：** `zotero-attanger` 导出 PDF 到磁盘，但为了节约空间可能每个文件只放在一个文件夹下。`paper-agent` **直接从 `zotero.sqlite` 读取真实的 Zotero collection 层级**，所以即使一篇论文属于 5 个 collection，它都知道——并在 Markdown 库中为每一个都创建 symlink 镜像。
 
 工作流程是：
 
-1. **整理 & 导出** — 用 [zotero-attanger](https://github.com/HenryYu-1022/zotero-attanger)（或类似工具）把 Zotero 附件迁移导出为一个清晰的、与 Zotero collection 层级一致的文件夹树。这一步同时也为后续的 YAML 元数据注入做好了目录结构准备。
+1. **通过 Google Drive 同步 PDF** — 用 [zotero-attanger](https://github.com/HenryYu-1022/zotero-attanger) 把 Zotero 附件同步到 Google Drive，实现多设备访问。`zotero-attanger` 把 PDF 从 Zotero 不透明的 `storage/` 目录移到 Google Drive 文件夹中。为了节省空间，每个 PDF 只存在一个文件夹下——这完全没问题，因为 `paper-agent` 是直接从 `zotero.sqlite` 读取完整 collection 层级的。
 
-2. **转换** — 把 `paper-agent` 指向导出的 PDF 目录。它用 [Marker](https://github.com/datalab-to/marker) 批量把每个 PDF 转成 Markdown，保持目录结构不变，并在每个文件里写入 YAML frontmatter（来源路径、转换时间、设备、文档角色等）。
+2. **转换 & 镜像** — 把 `paper-agent` 指向同步后的 PDF 目录**和**你的 `zotero.sqlite`。它用 [Marker](https://github.com/datalab-to/marker) 批量转换每个 PDF，同时读取 Zotero 数据库找出每篇论文所属的所有 collection，在 YAML frontmatter 中写入 `zotero_collections` 标签，并创建 **symlink 镜像**让 Markdown 库反映完整的 Zotero 层级。
 
 3. **用 AI 查询** — 在 Codex 或 Claude Code 里把生成的 Markdown 库作为 workspace 打开。现在你可以跨整个文献库提问：*"哪些论文提出了用于时间序列预测的 attention 架构？"*、*"总结一下我 `强化学习` collection 下所有论文的实验设置"*、*"比较这三篇论文描述的 loss function"*。AI 代理可以在几秒钟内读取、grep 和交叉引用数千页的全文内容。
 
-4. **同步到笔记库** — 因为输出是带结构化 frontmatter 的纯 Markdown，你可以直接把这个库丢进（或软链接到）Obsidian、Logseq 或任何基于 Markdown 的笔记系统。AI 生成的洞见和你自己的手写批注可以共存在同一个体系里。
+4. **保持同步** — 运行同步守护进程（`sync_zotero_collections.py`）持续监控你的 Zotero 数据库。当你在 Zotero 中移动论文到不同 collection 时，Markdown 库自动更新——新增 symlink、移除过时的镜像、刷新 frontmatter 标签。
 
-### 推荐：用 zotero-attanger 完成迁移步骤
+5. **同步到笔记库** — 因为输出是带结构化 frontmatter 的纯 Markdown，你可以直接把这个库丢进（或软链接到）Obsidian、Logseq 或任何基于 Markdown 的笔记系统。AI 生成的洞见和你自己的手写批注可以共存在同一个体系里。
 
-如果你的 PDF 目前还在 Zotero 的不透明存储里（`storage/` 目录下那些随机 8 字符文件夹），你需要一种方式把它们导出到一个人类可读的、按 collection 分层的目录树，`paper-agent` 才能处理。
+### 推荐：用 zotero-attanger 实现多设备 PDF 访问
 
-[**zotero-attanger**](https://github.com/HenryYu-1022/zotero-attanger) 就是为这个场景而做的。它读取你的 Zotero 数据库，按 collection 层级重建真实文件夹，并把附件移动或复制到对应目录中。它还能在导出的过程中注入或更新 YAML 元数据，为 `paper-agent` 后续写入 Markdown 的 YAML frontmatter 提供一个干净的起点。
+[**zotero-attanger**](https://github.com/HenryYu-1022/zotero-attanger) 把你的 Zotero 附件同步到 Google Drive，让你可以在任何设备上访问 PDF。它把文件从 Zotero 不透明的 `storage/` 目录（每个文件在一个随机 8 字符文件夹里，比如 `N7SMB24A/`）移到 Google Drive 上一个正常的、可浏览的目录中。
 
-> **提示：** 如果你的 PDF 本来就整理在普通文件夹里（不在 Zotero 的 storage 内），不需要 `zotero-attanger`——直接把 `paper-agent` 指向你的 PDF 根目录即可。
+因为 `zotero-attanger` 为了节省空间只把每个 PDF 放在一个文件夹下，所以一篇属于多个 collection 的论文在磁盘上只会出现一次。**这完全没问题** — `paper-agent` 直接从 `zotero.sqlite` 读取完整的 collection 层级，并为每个 collection 创建 symlink 镜像。
+
+> **提示：** 如果你的 PDF 已经在一个正常文件夹中（本地或云同步），不在 Zotero 的 `storage/` 里，那就不需要 `zotero-attanger`——直接把 `paper-agent` 指向你的 PDF 根目录即可。
 
 ---
 
-`paper-agent` 使用 [Marker](https://github.com/datalab-to/marker) 把一个 PDF 目录树转换成 Markdown 资料库。它不依赖 Google Drive，也不要求必须来自 Zotero；只要你的 PDF 已经整理在某个根目录下，无论是本地目录、云盘挂载目录，还是 `zotero-attanger` 导出的 collection 层级目录，都可以直接处理。
+`paper-agent` 使用 [Marker](https://github.com/datalab-to/marker) 把一个 PDF 目录树转换成 Markdown 资料库。配置了 Zotero 数据库路径后，它还会直接从 `zotero.sqlite` 读取 collection 层级，创建 symlink 镜像，让 Markdown 库与你的 Zotero 组织结构完全一致。
 
 
 ## 功能
@@ -92,9 +101,29 @@ English version: [README.markdown](README.markdown)
 
 ## 运行前准备
 
-1. Python 3.10+
-2. 按你的平台安装 PyTorch
-3. 安装 Marker
+> **⚠️ 硬件要求：** Marker 使用深度学习模型来转换 PDF。你的电脑至少需要 **8 GB 内存**。强烈建议有**独立显卡** — NVIDIA 显卡 + CUDA（Windows/Linux）或 Apple Silicon + MPS（Mac）。没有 GPU 也可以跑，但会非常慢（每篇 PDF 需要几分钟而不是几秒），只适合小规模文献库。
+
+以下是你需要安装的内容，一步一步来：
+
+### 1. 安装 Python
+
+需要 Python 3.10 或更新版本。如果不确定是否已安装，打开终端输入：
+
+```bash
+python3 --version
+```
+
+如果版本低于 3.10，或者命令找不到，去 [python.org](https://www.python.org/downloads/) 下载安装。
+
+### 2. 安装 PyTorch
+
+PyTorch 是 Marker 运行所需的深度学习框架。去 [pytorch.org](https://pytorch.org/get-started/locally/) 按你的平台选择安装命令：
+
+- **Mac（Apple Silicon）：** PyTorch 开箱即用，自动支持 MPS 加速
+- **Windows/Linux + NVIDIA 显卡：** 选择与你驱动匹配的 CUDA 版本
+- **没有 GPU：** 选 CPU 版——能用，只是慢很多
+
+### 3. 安装 Marker
 
 ```bash
 pip install marker-pdf
@@ -102,11 +131,21 @@ pip install marker-pdf
 pip install marker-pdf[full]
 ```
 
-4. 安装项目依赖
+### 4. 安装项目依赖
 
 ```bash
 pip install -r requirements.txt
 ```
+
+### 5. 首次下载 Marker 模型（只需要一次）
+
+第一次运行 Marker 时会自动下载 AI 模型（约 1–2 GB）。跑一下这个命令把模型缓存下来：
+
+```bash
+marker_single /path/to/any-test.pdf --output_dir /tmp/test_out --force_ocr
+```
+
+测试输出可以删掉。模型已缓存，之后不需要重新下载。
 
 ## 快速开始
 
