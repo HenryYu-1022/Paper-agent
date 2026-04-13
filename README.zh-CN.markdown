@@ -17,6 +17,26 @@ English version: [README.markdown](README.markdown)
 
 真实的 Markdown 主目录永远跟随 `input_root` 的相对路径。Zotero collection 只负责补充 frontmatter 和额外镜像目录，不决定主 bundle 的物理落点。
 
+## 相关项目：MarkItDown
+
+[MarkItDown](https://github.com/microsoft/markitdown) 是微软的另一个项目，重点是把多种文件格式转换成 Markdown，而不只是 PDF。
+
+但基于当前这份 `paper-agent` 代码，必须明确几点：
+
+- `paper-agent` 现在并不会直接调用 MarkItDown
+- `paper-agent` 当前真正使用的转换器仍然是 Marker
+- manifest 逻辑、raw 输出目录、supporting 放置规则、重复 bundle 规整和 watcher 流程，都是按当前 Marker 流水线设计的
+
+所以，按“现有代码已经提供的功能”来看，两者目前最合理的配合方式是手动互补，而不是原生集成：
+
+- `paper-agent` 负责 PDF 文献库这条主流程：批量转换、watcher、manifest 管理、supporting 归位、重复 Markdown 规整，以及 Zotero collection 元数据或镜像
+- MarkItDown 适合你在这条主流程之外，单独处理其他类型文档的临时 Markdown 转换
+
+如果只看当前代码下的工作量：
+
+- 低工作量：在文档里说明 MarkItDown 是可搭配使用的相关项目，并手动配合使用
+- 更高工作量：把 Marker 替换掉，或者在 `paper-agent` 里真正新增一条 MarkItDown 转换路径；这在当前仓库里都还没有实现，所以 README 也不会把它写成现成功能
+
 ## 项目功能
 
 - 用 [Marker](https://github.com/datalab-to/marker) 把 PDF 转成 Markdown

@@ -17,6 +17,26 @@ The project has two independent inputs:
 
 The physical Markdown output always follows the relative folder structure under `input_root`. Zotero collections are optional metadata and optional extra mirrors; they do not choose the primary physical bundle location.
 
+## Related Project: MarkItDown
+
+[MarkItDown](https://github.com/microsoft/markitdown) is a separate Microsoft project focused on converting many file types to Markdown, not just PDFs.
+
+Based on the current `paper-agent` codebase:
+
+- `paper-agent` does not call MarkItDown directly
+- `paper-agent` is still built around Marker as the actual converter
+- The manifest logic, raw-output handling, supporting placement, duplicate-bundle normalization, and watcher flow all assume the current Marker-based pipeline
+
+So the realistic way to use both projects together today is a manual, complementary workflow:
+
+- Use `paper-agent` for the PDF-library workflow: batch conversion, watcher mode, manifest management, supporting placement, duplicate Markdown normalization, and Zotero collection metadata or mirrors
+- Use MarkItDown separately when you want ad hoc Markdown conversion for other document types outside this pipeline
+
+Work estimate under the current code:
+
+- Low effort: mention MarkItDown in the docs and use it manually alongside `paper-agent`
+- Higher effort: replace Marker or add a real MarkItDown conversion path inside `paper-agent`; that is not implemented in the current repository and is not claimed by this README
+
 ## What The Project Does
 
 - Converts PDFs to Markdown with [Marker](https://github.com/datalab-to/marker)
