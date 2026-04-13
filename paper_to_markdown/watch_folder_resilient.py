@@ -10,6 +10,7 @@ from watchdog.observers import Observer
 
 try:
     from .common import (
+        bundle_dir_for_pdf,
         cleanup_marker_raw_root,
         ensure_directories,
         find_all_pdfs,
@@ -20,10 +21,13 @@ try:
         pdf_fingerprint,
         relative_pdf_path,
         setup_logger,
+        supporting_markdown_name,
+        supporting_source_info,
     )
     from .pipeline import ManifestStore, convert_one_pdf_with_retries, delete_pdf_artifacts
 except ImportError:
     from common import (
+        bundle_dir_for_pdf,
         cleanup_marker_raw_root,
         ensure_directories,
         find_all_pdfs,
@@ -34,6 +38,8 @@ except ImportError:
         pdf_fingerprint,
         relative_pdf_path,
         setup_logger,
+        supporting_markdown_name,
+        supporting_source_info,
     )
     from pipeline import ManifestStore, convert_one_pdf_with_retries, delete_pdf_artifacts
 
@@ -125,12 +131,33 @@ class PdfEventHandler(FileSystemEventHandler):
         return True
 
     def _needs_processing(self, pdf_path: Path, manifest: ManifestStore) -> bool:
+        bundle_dir = bundle_dir_for_pdf(pdf_path, self.input_root, self.config)
+        supporting_info = supporting_source_info(pdf_path)
+        if supporting_info:
+            primary_pdf, supporting_index = supporting_info
+            primary_bundle_dir = bundle_dir_for_pdf(primary_pdf, self.input_root, self.config)
+            target_md = primary_bundle_dir / supporting_markdown_name(supporting_index)
+        else:
+            target_md = bundle_dir / (pdf_path.stem + ".md")
+
+        if target_md.exists():
+            return False
+
         rel_key = str(relative_pdf_path(pdf_path, self.input_root)).replace("\\", "/")
+        entry = manifest.get(rel_key)
         fingerprint = pdf_fingerprint(
             pdf_path,
             use_sha256=self.config.get("compute_sha256", False),
         )
-        return not manifest.is_unchanged(rel_key, fingerprint)
+
+        if not target_md.exists():
+            if entry and entry.get("status") == "failed":
+                old_fp = {k: v for k, v in entry.items() if k in fingerprint}
+                if fingerprint == old_fp:
+                    return False
+            return True
+            
+        return False
 
     def _rescan_input_root(self, reason: str) -> int:
         manifest = ManifestStore(manifest_path(self.config))
