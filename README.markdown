@@ -202,6 +202,26 @@ cd paper_to_markdown
 python3 watch_folder_resilient.py
 ```
 
+## Which File Should I Start?
+
+If you only remember one section in this README, use this map:
+
+| Goal | Start this file | Run from | Long-running? | What actually stays alive |
+|-----|-----|-----|-----|-----|
+| Convert the current library once | `paper_to_markdown/run_once.py` | `paper_to_markdown/` | No | Nothing; it exits when the batch finishes |
+| Continuously watch `input_root` for new PDFs | `paper_to_markdown/watch_folder_resilient.py` | `paper_to_markdown/` | Yes | `watch_folder_resilient.py` itself |
+| Continuously sync Zotero collection mirrors | `paper_to_markdown/sync_zotero_collections.py` | `paper_to_markdown/` | Optional yes | `sync_zotero_collections.py` itself |
+| Auto-start the watcher at login on macOS | `install_or_update_launch_agent.sh` | repo root | No | `paper_agent_watch_supervisor.sh` + `watch_folder_resilient.py` |
+| Auto-start the watcher at login on Windows | `install_or_update_watch_task.ps1` | repo root | No | `paper_agent_watch_supervisor.ps1` + `watch_folder_resilient.py` |
+
+Practical summary:
+
+- `run_once.py` is the main manual entrypoint.
+- `watch_folder_resilient.py` is the main always-on watcher.
+- `install_or_update_launch_agent.sh` and `install_or_update_watch_task.ps1` are installers, not daemons.
+- `paper_agent_watch_supervisor.sh` and `paper_agent_watch_supervisor.ps1` are the background supervisors that keep the watcher alive after OS login.
+- `sync_zotero_collections.py` is a separate daemon. The current auto-start installers do not install it for you.
+
 ## Local Folder Workflow
 
 If your PDFs are already stored locally, for example:
@@ -295,7 +315,10 @@ zsh ./install_or_update_launch_agent.sh
 zsh ./remove_launch_agent.sh
 ```
 
+- `install_or_update_launch_agent.sh`: one-shot installer/updater
+- `remove_launch_agent.sh`: one-shot remover
 - Supervisor: `paper_agent_watch_supervisor.sh`
+- Long-running background processes after install: `paper_agent_watch_supervisor.sh` and its child `paper_to_markdown/watch_folder_resilient.py`
 - Default label: `com.paper.agent.watch`
 - Installed plist: `~/Library/LaunchAgents/com.paper.agent.watch.plist`
 
@@ -306,8 +329,13 @@ powershell -ExecutionPolicy Bypass -File .\install_or_update_watch_task.ps1
 powershell -ExecutionPolicy Bypass -File .\remove_watch_task.ps1
 ```
 
+- `install_or_update_watch_task.ps1`: one-shot installer/updater
+- `remove_watch_task.ps1`: one-shot remover
 - Supervisor: `paper_agent_watch_supervisor.ps1`
+- Long-running background processes after install: `paper_agent_watch_supervisor.ps1` and its child `paper_to_markdown/watch_folder_resilient.py`
 - Default task name: `PaperAgentWatch`
+
+Important: this background startup setup only covers the PDF watcher. If you also want continuous Zotero collection syncing, you still need to run `paper_to_markdown/sync_zotero_collections.py` separately.
 
 ## Output Structure
 
@@ -462,32 +490,50 @@ Config file: `paper_to_markdown/settings.json`
 | `collection_mirror_mode` | No | `symlink` | `symlink` (saves space) or `copy` (for Windows without admin) |
 | `zotero_sync_interval_seconds` | No | `60` | Polling interval for the collection sync daemon |
 
-## Repository Layout
+## File-by-File Guide
 
-```text
-paper-agent/
-  paper_to_markdown/
-    __init__.py
-    common.py
-    pipeline.py
-    run_once.py
-    watch_folder_resilient.py
-    zotero_collections.py
-    sync_zotero_collections.py
-    settings.json
-    settings.example.json
-  backfill_supporting.py
-  monitor_conversion_progress.py
-  paper_agent_watch_supervisor.ps1
-  paper_agent_watch_supervisor.sh
-  install_or_update_watch_task.ps1
-  remove_watch_task.ps1
-  install_or_update_launch_agent.sh
-  remove_launch_agent.sh
-  requirements.txt
-  README.markdown
-  README.zh-CN.markdown
-```
+### Runtime files
+
+| File | Purpose | How to use it | Background resident? |
+|-----|-----|-----|-----|
+| `paper_to_markdown/run_once.py` | Main manual CLI for batch conversion, single-file conversion, forced reconvert, and cleanup | `cd paper_to_markdown && python3 run_once.py` | No |
+| `paper_to_markdown/watch_folder_resilient.py` | Main watcher daemon for `input_root`; converts PDFs when files are created, changed, moved, or deleted | `cd paper_to_markdown && python3 watch_folder_resilient.py` | Yes, if you leave it running |
+| `paper_to_markdown/sync_zotero_collections.py` | Syncs Zotero collection assignments into frontmatter and mirror folders | `cd paper_to_markdown && python3 sync_zotero_collections.py --once` or run without `--once` for daemon mode | Optional; yes in daemon mode |
+| `paper_to_markdown/pipeline.py` | Core conversion engine: runs Marker, writes Markdown/frontmatter, manages manifest, retries, and cleanup | Imported by other scripts; do not start directly | No |
+| `paper_to_markdown/common.py` | Shared helpers for config loading, paths, logging, manifest/state locations, and frontmatter utilities | Imported by other scripts; do not start directly | No |
+| `paper_to_markdown/zotero_collections.py` | Read-only Zotero SQLite reader used to resolve collection hierarchy | Imported by other scripts; do not start directly | No |
+| `paper_to_markdown/__init__.py` | Marks `paper_to_markdown` as a Python package | No direct action | No |
+| `paper_to_markdown/settings.example.json` | Config template you copy before first run | Copy to `paper_to_markdown/settings.json` and edit paths | No |
+| `paper_to_markdown/settings.json` | Your machine-local runtime config file | Created by you; every runnable script reads it | No |
+
+### Utility and repair files
+
+| File | Purpose | How to use it | Background resident? |
+|-----|-----|-----|-----|
+| `backfill_supporting.py` | Finds supporting PDFs whose Markdown companion is missing and optionally backfills them | `python3 backfill_supporting.py` or `python3 backfill_supporting.py --apply` from repo root | No |
+| `monitor_conversion_progress.py` | Read-only status viewer for manifest/log progress and ETA | `python3 monitor_conversion_progress.py` or `python3 monitor_conversion_progress.py --watch --interval 30` from repo root | No; `--watch` just keeps the terminal open |
+
+### Background automation files
+
+| File | Purpose | How to use it | Background resident? |
+|-----|-----|-----|-----|
+| `install_or_update_launch_agent.sh` | Installs or refreshes the macOS LaunchAgent that auto-starts the watcher on login | `zsh ./install_or_update_launch_agent.sh` from repo root | No; installer only |
+| `remove_launch_agent.sh` | Removes the macOS LaunchAgent and stops related watcher processes | `zsh ./remove_launch_agent.sh` from repo root | No |
+| `paper_agent_watch_supervisor.sh` | macOS supervisor loop that restarts `watch_folder_resilient.py` if it exits | Started by LaunchAgent; not usually run by hand | Yes, after install |
+| `install_or_update_watch_task.ps1` | Installs or refreshes the Windows Scheduled Task that auto-starts the watcher on login | `powershell -ExecutionPolicy Bypass -File .\install_or_update_watch_task.ps1` from repo root | No; installer only |
+| `remove_watch_task.ps1` | Removes the Windows Scheduled Task | `powershell -ExecutionPolicy Bypass -File .\remove_watch_task.ps1` from repo root | No |
+| `paper_agent_watch_supervisor.ps1` | Windows supervisor loop that restarts `watch_folder_resilient.py` if it exits | Started by Scheduled Task; not usually run by hand | Yes, after install |
+
+### Documentation and metadata files
+
+| File | Purpose | How to use it | Background resident? |
+|-----|-----|-----|-----|
+| `README.markdown` | English documentation | Read it | No |
+| `README.zh-CN.markdown` | Chinese documentation | Read it | No |
+| `requirements.txt` | Python dependency list for this project | `pip install -r requirements.txt` | No |
+| `docs/superpowers/specs/2026-04-09-mac-launchagent-design.md` | Design note for the macOS LaunchAgent workflow | Reference only | No |
+| `docs/superpowers/plans/2026-04-09-mac-launchagent.md` | Implementation planning note for macOS background startup | Reference only | No |
+| `LICENSE` | License text | Reference only | No |
 
 ## Notes
 
