@@ -212,16 +212,16 @@ If you only remember one section in this README, use this map:
 | Convert the current library once | `paper_to_markdown/run_once.py` | `paper_to_markdown/` | No | Nothing; it exits when the batch finishes |
 | Continuously watch `input_root` for new PDFs | `paper_to_markdown/watch_folder_resilient.py` | `paper_to_markdown/` | Yes | `watch_folder_resilient.py` itself |
 | Continuously sync Zotero collection mirrors | `paper_to_markdown/sync_zotero_collections.py` | `paper_to_markdown/` | Optional yes | `sync_zotero_collections.py` itself |
-| Auto-start the watcher at login on macOS | `watch_autostart.sh` | repo root | No | `paper_agent_watch_supervisor.sh` + `watch_folder_resilient.py` |
-| Auto-start the watcher at login on Windows | `watch_autostart.ps1` | repo root | No | `paper_agent_watch_supervisor.ps1` + `watch_folder_resilient.py` |
+| Auto-start the watcher at login on macOS | `watch_autostart.sh` | repo root | No | `autostart/paper_agent_watch_supervisor.sh` + `watch_folder_resilient.py` |
+| Auto-start the watcher at login on Windows | `watch_autostart.ps1` | repo root | No | `autostart/paper_agent_watch_supervisor.ps1` + `watch_folder_resilient.py` |
 
 Practical summary:
 
 - `run_once.py` is the main manual entrypoint.
 - `watch_folder_resilient.py` is the main always-on watcher.
 - `watch_autostart.sh` and `watch_autostart.ps1` are the recommended one-command entrypoints for login auto-start management.
-- `install_or_update_launch_agent.sh`, `remove_launch_agent.sh`, `install_or_update_watch_task.ps1`, and `remove_watch_task.ps1` are the underlying installer/remover scripts.
-- `paper_agent_watch_supervisor.sh` and `paper_agent_watch_supervisor.ps1` are the background supervisors that keep the watcher alive after OS login.
+- `autostart/install_or_update_launch_agent.sh`, `autostart/remove_launch_agent.sh`, `autostart/install_or_update_watch_task.ps1`, and `autostart/remove_watch_task.ps1` are the underlying installer/remover scripts.
+- `autostart/paper_agent_watch_supervisor.sh` and `autostart/paper_agent_watch_supervisor.ps1` are the background supervisors that keep the watcher alive after OS login.
 - `sync_zotero_collections.py` is a separate daemon. The current auto-start installers do not install it for you.
 
 ## Local Folder Workflow
@@ -253,7 +253,7 @@ This works the same way for any exporter that has already arranged PDFs into fol
 
 ## Usage
 
-Scripts inside `paper_to_markdown/` should be run from that directory. Root-level utilities such as `backfill_supporting.py`, `monitor_conversion_progress.py`, `watch_autostart.ps1`, `watch_autostart.sh`, `install_or_update_watch_task.ps1`, `remove_watch_task.ps1`, `install_or_update_launch_agent.sh`, and `remove_launch_agent.sh` should be run from the repository root.
+Scripts inside `paper_to_markdown/` should be run from that directory. Root-level utilities such as `backfill_supporting.py`, `monitor_conversion_progress.py`, `watch_autostart.ps1`, and `watch_autostart.sh` should be run from the repository root. The lower-level auto-start helpers now live under `autostart/`.
 
 ### Manual Conversion
 
@@ -325,30 +325,30 @@ zsh ./watch_autostart.sh install
 ```
 
 - `watch_autostart.sh`: unified install/remove/status entrypoint
-- Under the hood it calls `install_or_update_launch_agent.sh` and `remove_launch_agent.sh`
-- Supervisor: `paper_agent_watch_supervisor.sh`
-- Long-running background processes after install: `paper_agent_watch_supervisor.sh` and its child `paper_to_markdown/watch_folder_resilient.py`
+- Under the hood it calls `autostart/install_or_update_launch_agent.sh` and `autostart/remove_launch_agent.sh`
+- Supervisor: `autostart/paper_agent_watch_supervisor.sh`
+- Long-running background processes after install: `autostart/paper_agent_watch_supervisor.sh` and its child `paper_to_markdown/watch_folder_resilient.py`
 - Default label: `com.paper.agent.watch`
 - Installed plist: `~/Library/LaunchAgents/com.paper.agent.watch.plist`
 
 ### Windows Scheduled Task
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1 -Action status
-powershell -NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1 -Action remove
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\YHY\Paper-agent\watch_autostart.ps1" # replace with your own local file path if different
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\YHY\Paper-agent\watch_autostart.ps1" -Action status # replace with your own local file path if different
+powershell -NoProfile -ExecutionPolicy Bypass -File "E:\YHY\Paper-agent\watch_autostart.ps1" -Action remove # replace with your own local file path if different
 ```
 
 Run the install command as Administrator from a normal PowerShell session:
 
 ```powershell
-Start-Process powershell -Verb RunAs -WorkingDirectory $PWD -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1'
+Start-Process powershell -Verb RunAs -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "E:\YHY\Paper-agent\watch_autostart.ps1"' # replace with your own local file path if different
 ```
 
 - `watch_autostart.ps1`: unified install/remove/status entrypoint
-- Under the hood it calls `install_or_update_watch_task.ps1` and `remove_watch_task.ps1`
-- Supervisor: `paper_agent_watch_supervisor.ps1`
-- Long-running background processes after install: `paper_agent_watch_supervisor.ps1` and its child `paper_to_markdown/watch_folder_resilient.py`
+- Under the hood it calls `autostart/install_or_update_watch_task.ps1` and `autostart/remove_watch_task.ps1`
+- Supervisor: `autostart/paper_agent_watch_supervisor.ps1`
+- Long-running background processes after install: `autostart/paper_agent_watch_supervisor.ps1` and its child `paper_to_markdown/watch_folder_resilient.py`
 - Default task name: `PaperAgentWatch`
 
 Important: this background startup setup only covers the PDF watcher. If you also want continuous Zotero collection syncing, you still need to run `paper_to_markdown/sync_zotero_collections.py` separately.
@@ -534,13 +534,13 @@ Config file: `paper_to_markdown/settings.json`
 | File | Purpose | How to use it | Background resident? |
 |-----|-----|-----|-----|
 | `watch_autostart.sh` | Unified macOS entrypoint to install, remove, or inspect the LaunchAgent | `zsh ./watch_autostart.sh install`, `status`, or `remove` from repo root | No |
-| `install_or_update_launch_agent.sh` | Installs or refreshes the macOS LaunchAgent that auto-starts the watcher on login | `zsh ./install_or_update_launch_agent.sh` from repo root | No; installer only |
-| `remove_launch_agent.sh` | Removes the macOS LaunchAgent and stops related watcher processes | `zsh ./remove_launch_agent.sh` from repo root | No |
-| `paper_agent_watch_supervisor.sh` | macOS supervisor loop that restarts `watch_folder_resilient.py` if it exits | Started by LaunchAgent; not usually run by hand | Yes, after install |
+| `autostart/install_or_update_launch_agent.sh` | Installs or refreshes the macOS LaunchAgent that auto-starts the watcher on login | Usually called via `zsh ./watch_autostart.sh install` | No; installer only |
+| `autostart/remove_launch_agent.sh` | Removes the macOS LaunchAgent and stops related watcher processes | Usually called via `zsh ./watch_autostart.sh remove` | No |
+| `autostart/paper_agent_watch_supervisor.sh` | macOS supervisor loop that restarts `watch_folder_resilient.py` if it exits | Started by LaunchAgent; not usually run by hand | Yes, after install |
 | `watch_autostart.ps1` | Unified Windows entrypoint to install, remove, or inspect the Scheduled Task | `powershell -NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1`, optionally with `-Action status` or `-Action remove`, from repo root | No |
-| `install_or_update_watch_task.ps1` | Installs or refreshes the Windows Scheduled Task that auto-starts the watcher on login | `powershell -ExecutionPolicy Bypass -File .\install_or_update_watch_task.ps1` from repo root | No; installer only |
-| `remove_watch_task.ps1` | Removes the Windows Scheduled Task | `powershell -ExecutionPolicy Bypass -File .\remove_watch_task.ps1` from repo root | No |
-| `paper_agent_watch_supervisor.ps1` | Windows supervisor loop that restarts `watch_folder_resilient.py` if it exits | Started by Scheduled Task; not usually run by hand | Yes, after install |
+| `autostart/install_or_update_watch_task.ps1` | Installs or refreshes the Windows Scheduled Task that auto-starts the watcher on login | Usually called via `watch_autostart.ps1` | No; installer only |
+| `autostart/remove_watch_task.ps1` | Removes the Windows Scheduled Task | Usually called via `watch_autostart.ps1 -Action remove` | No |
+| `autostart/paper_agent_watch_supervisor.ps1` | Windows supervisor loop that restarts `watch_folder_resilient.py` if it exits | Started by Scheduled Task; not usually run by hand | Yes, after install |
 
 ### Documentation and metadata files
 

@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-function Get-ScriptRoot {
+function Get-ScriptDirectory {
     if ($PSScriptRoot) {
         return $PSScriptRoot
     }
@@ -22,7 +22,8 @@ function Read-Config {
     return Get-Content -LiteralPath $Path -Encoding UTF8 -Raw | ConvertFrom-Json
 }
 
-$ProjectRoot = Get-ScriptRoot
+$ScriptDirectory = Get-ScriptDirectory
+$ProjectRoot = Split-Path -Parent $ScriptDirectory
 $WorkflowRoot = Join-Path $ProjectRoot 'paper_to_markdown'
 $ConfigPath = Join-Path $WorkflowRoot 'settings.json'
 

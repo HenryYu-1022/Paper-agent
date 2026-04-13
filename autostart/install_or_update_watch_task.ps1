@@ -4,7 +4,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Get-ProjectRoot {
+function Get-ScriptDirectory {
     if ($PSScriptRoot) {
         return $PSScriptRoot
     }
@@ -20,8 +20,9 @@ function Get-ProjectRoot {
     throw 'Unable to determine the script directory. Run this script from a saved .ps1 file.'
 }
 
-$ProjectRoot = Get-ProjectRoot
-$SupervisorPath = Join-Path $ProjectRoot 'paper_agent_watch_supervisor.ps1'
+$ScriptDirectory = Get-ScriptDirectory
+$ProjectRoot = Split-Path -Parent $ScriptDirectory
+$SupervisorPath = Join-Path $ScriptDirectory 'paper_agent_watch_supervisor.ps1'
 
 if (-not (Test-Path -LiteralPath $SupervisorPath)) {
     throw "Supervisor script not found: $SupervisorPath"

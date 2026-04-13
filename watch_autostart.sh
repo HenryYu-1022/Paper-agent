@@ -5,8 +5,9 @@ set -euo pipefail
 ACTION="${1:-install}"
 LABEL="${2:-com.paper.agent.watch}"
 PROJECT_ROOT="${0:A:h}"
-INSTALL_SCRIPT_PATH="$PROJECT_ROOT/install_or_update_launch_agent.sh"
-REMOVE_SCRIPT_PATH="$PROJECT_ROOT/remove_launch_agent.sh"
+AUTOSTART_ROOT="$PROJECT_ROOT/autostart"
+INSTALL_SCRIPT_PATH="$AUTOSTART_ROOT/install_or_update_launch_agent.sh"
+REMOVE_SCRIPT_PATH="$AUTOSTART_ROOT/remove_launch_agent.sh"
 PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
 
 case "$ACTION" in

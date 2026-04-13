@@ -23,8 +23,9 @@ function Get-ProjectRoot {
 }
 
 $ProjectRoot = Get-ProjectRoot
-$InstallScriptPath = Join-Path $ProjectRoot 'install_or_update_watch_task.ps1'
-$RemoveScriptPath = Join-Path $ProjectRoot 'remove_watch_task.ps1'
+$AutostartRoot = Join-Path $ProjectRoot 'autostart'
+$InstallScriptPath = Join-Path $AutostartRoot 'install_or_update_watch_task.ps1'
+$RemoveScriptPath = Join-Path $AutostartRoot 'remove_watch_task.ps1'
 
 switch ($Action) {
     'install' {

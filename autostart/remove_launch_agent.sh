@@ -3,8 +3,9 @@
 set -euo pipefail
 
 LABEL="${1:-com.paper.agent.watch}"
-PROJECT_ROOT="${0:A:h}"
-SUPERVISOR_PATH="$PROJECT_ROOT/paper_agent_watch_supervisor.sh"
+SCRIPT_DIR="${0:A:h}"
+PROJECT_ROOT="${SCRIPT_DIR:h}"
+SUPERVISOR_PATH="$SCRIPT_DIR/paper_agent_watch_supervisor.sh"
 WORKFLOW_ROOT="$PROJECT_ROOT/paper_to_markdown"
 PLIST_PATH="$HOME/Library/LaunchAgents/$LABEL.plist"
 

@@ -2,8 +2,9 @@
 
 set -euo pipefail
 
-PROJECT_ROOT="${0:A:h}"
-SUPERVISOR_PATH="$PROJECT_ROOT/paper_agent_watch_supervisor.sh"
+SCRIPT_DIR="${0:A:h}"
+PROJECT_ROOT="${SCRIPT_DIR:h}"
+SUPERVISOR_PATH="$SCRIPT_DIR/paper_agent_watch_supervisor.sh"
 WORKFLOW_ROOT="$PROJECT_ROOT/paper_to_markdown"
 CONFIG_PATH="$WORKFLOW_ROOT/settings.json"
 WATCH_SCRIPT_PATH="$WORKFLOW_ROOT/watch_folder_resilient.py"
