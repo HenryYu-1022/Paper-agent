@@ -60,6 +60,34 @@ def _build_collection_tree(conn: sqlite3.Connection) -> dict[int, str]:
     return cache
 
 
+def _extract_attachment_filename(raw_path: str) -> str | None:
+    """Normalise a value from ``itemAttachments.path`` into a bare filename.
+
+    Returns *None* if the path does not look like a PDF attachment.
+    Supported input shapes:
+
+    * ``storage:filename.pdf``       (managed storage)
+    * ``attachments:filename.pdf``   (linked attachment, relative)
+    * ``D:\\path\\to\\filename.pdf``   (linked attachment, absolute Windows)
+    * ``/path/to/filename.pdf``      (linked attachment, absolute Unix)
+    """
+    if not raw_path:
+        return None
+
+    filename = raw_path
+    for prefix in ("storage:", "attachments:"):
+        if filename.startswith(prefix):
+            filename = filename[len(prefix):]
+            break
+
+    if "\\" in filename or "/" in filename:
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+
+    if not filename.lower().endswith(".pdf"):
+        return None
+    return filename
+
+
 def _build_pdf_collection_map(
     conn: sqlite3.Connection,
     collection_tree: dict[int, str],
@@ -71,7 +99,6 @@ def _build_pdf_collection_map(
     item that belongs to at least one collection are included.
     """
 
-    # Zotero stores attachment paths as "storage:filename.pdf"
     cursor = conn.execute(
         """
         SELECT ia.path, ci.collectionID
@@ -84,24 +111,8 @@ def _build_pdf_collection_map(
 
     mapping: dict[str, list[str]] = {}
     for raw_path, cid in cursor:
-        # Extract the filename from various Zotero path formats:
-        #   - "storage:filename.pdf"       (managed storage)
-        #   - "attachments:filename.pdf"   (linked attachment, relative)
-        #   - "D:\path\to\filename.pdf"    (linked attachment, absolute Windows)
-        #   - "/path/to/filename.pdf"      (linked attachment, absolute Unix)
-        filename = raw_path
-        for prefix in ("storage:", "attachments:"):
-            if filename.startswith(prefix):
-                filename = filename[len(prefix):]
-                break
-
-        # For linked attachments with full paths, extract just the filename
-        # Handle both Windows backslash and Unix forward slash
-        if "\\" in filename or "/" in filename:
-            filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
-
-        # Only keep PDF attachments
-        if not filename.lower().endswith(".pdf"):
+        filename = _extract_attachment_filename(raw_path)
+        if filename is None:
             continue
 
         col_path = collection_tree.get(cid)
@@ -116,6 +127,66 @@ def _build_pdf_collection_map(
     for filename in mapping:
         mapping[filename].sort()
 
+    return mapping
+
+
+def _build_pdf_metadata_map(
+    conn: sqlite3.Connection,
+) -> dict[str, dict[str, Any]]:
+    """Return ``{pdf_filename: {item_key, attachment_key, annotation_count}}``.
+
+    Excludes attachments whose own item or parent item lives in the trash
+    (``deletedItems``).  When the same filename maps to several attachments
+    the first one wins; later duplicates are ignored.
+    """
+
+    annotation_counts: dict[int, int] = {}
+    annot_cursor = conn.execute(
+        """
+        SELECT ann.parentItemID, COUNT(*)
+        FROM itemAnnotations ann
+        WHERE ann.itemID NOT IN (SELECT itemID FROM deletedItems)
+        GROUP BY ann.parentItemID
+        """
+    )
+    for parent_id, count in annot_cursor:
+        if parent_id is None:
+            continue
+        annotation_counts[parent_id] = count
+
+    cursor = conn.execute(
+        """
+        SELECT
+            ia.path,
+            ia.itemID,
+            ia.parentItemID,
+            att_item.key,
+            parent_item.key
+        FROM itemAttachments ia
+        JOIN items att_item ON att_item.itemID = ia.itemID
+        LEFT JOIN items parent_item ON parent_item.itemID = ia.parentItemID
+        WHERE ia.path IS NOT NULL
+          AND ia.path <> ''
+          AND ia.itemID NOT IN (SELECT itemID FROM deletedItems)
+          AND (
+            ia.parentItemID IS NULL
+            OR ia.parentItemID NOT IN (SELECT itemID FROM deletedItems)
+          )
+        """
+    )
+
+    mapping: dict[str, dict[str, Any]] = {}
+    for raw_path, attachment_id, _parent_id, attachment_key, parent_key in cursor:
+        filename = _extract_attachment_filename(raw_path)
+        if filename is None:
+            continue
+        if filename in mapping:
+            continue
+        mapping[filename] = {
+            "item_key": parent_key,
+            "attachment_key": attachment_key,
+            "annotation_count": int(annotation_counts.get(attachment_id, 0)),
+        }
     return mapping
 
 
@@ -135,6 +206,7 @@ class ZoteroCollectionMap:
         self.db_path = Path(db_path).expanduser().resolve()
         self._collection_tree: dict[int, str] | None = None
         self._pdf_map: dict[str, list[str]] | None = None
+        self._pdf_metadata: dict[str, dict[str, Any]] | None = None
 
     # -- loading / caching ---------------------------------------------------
 
@@ -149,6 +221,7 @@ class ZoteroCollectionMap:
             logger.warning("Zotero database not found: %s", self.db_path)
             self._collection_tree = {}
             self._pdf_map = {}
+            self._pdf_metadata = {}
             return
 
         try:
@@ -157,20 +230,24 @@ class ZoteroCollectionMap:
             logger.warning("Cannot open Zotero database: %s", exc)
             self._collection_tree = {}
             self._pdf_map = {}
+            self._pdf_metadata = {}
             return
 
         try:
             self._collection_tree = _build_collection_tree(conn)
             self._pdf_map = _build_pdf_collection_map(conn, self._collection_tree)
+            self._pdf_metadata = _build_pdf_metadata_map(conn)
             logger.info(
-                "Zotero DB loaded: %d collections, %d PDF mappings",
+                "Zotero DB loaded: %d collections, %d PDF mappings, %d PDF metadata records",
                 len(self._collection_tree),
                 len(self._pdf_map),
+                len(self._pdf_metadata),
             )
         except sqlite3.Error as exc:
             logger.warning("Error reading Zotero database: %s", exc)
             self._collection_tree = {}
             self._pdf_map = {}
+            self._pdf_metadata = {}
         finally:
             conn.close()
 
@@ -191,6 +268,16 @@ class ZoteroCollectionMap:
         self._ensure_loaded()
         assert self._pdf_map is not None
         return dict(self._pdf_map)
+
+    def get_metadata_for_pdf(self, filename: str) -> dict[str, Any]:
+        """Return ``{item_key, attachment_key, annotation_count}`` for a PDF.
+
+        Returns an empty dict if the filename is not found in the Zotero
+        database (e.g. the PDF lives only on disk, not in any Zotero item).
+        """
+        self._ensure_loaded()
+        assert self._pdf_metadata is not None
+        return dict(self._pdf_metadata.get(filename, {}))
 
     @property
     def collection_tree(self) -> dict[int, str]:

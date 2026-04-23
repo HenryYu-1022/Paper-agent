@@ -22,8 +22,6 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import json
-import os
 import shutil
 import signal
 import sys
@@ -33,9 +31,7 @@ from typing import Any
 
 try:
     from .common import (
-        collection_state_path,
         load_config,
-        manifest_path,
         markdown_root,
         is_relative_to,
         pdf_bundle_relpath,
@@ -43,15 +39,12 @@ try:
         safe_rmtree,
         setup_logger,
         to_posix_path_str,
-        update_frontmatter_fields,
     )
     from .zotero_collections import ZoteroCollectionMap
     from .pipeline import ManifestStore
 except ImportError:
     from common import (
-        collection_state_path,
         load_config,
-        manifest_path,
         markdown_root,
         is_relative_to,
         pdf_bundle_relpath,
@@ -59,31 +52,9 @@ except ImportError:
         safe_rmtree,
         setup_logger,
         to_posix_path_str,
-        update_frontmatter_fields,
     )
     from zotero_collections import ZoteroCollectionMap
     from pipeline import ManifestStore
-
-
-# ---------------------------------------------------------------------------
-# Collection state persistence
-# ---------------------------------------------------------------------------
-
-def _load_collection_state(path: Path) -> dict[str, list[str]]:
-    """Load the last-known ``{pdf_filename: [collection_paths]}`` state."""
-    if not path.exists():
-        return {}
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _save_collection_state(path: Path, state: dict[str, list[str]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -169,12 +140,8 @@ def sync_once(config: dict[str, Any], logger) -> dict[str, int]:
     zotero_map.reload()
     current_zotero = zotero_map.get_all_pdf_collections()
 
-    # 2. Load previous state
-    state_path = collection_state_path(config)
-    previous_state = _load_collection_state(state_path)
-
-    # 3. Load manifest to find converted PDFs
-    manifest = ManifestStore(manifest_path(config))
+    # 2. Load frontmatter index to find converted PDFs
+    manifest = ManifestStore(config)
     md_root = markdown_root(config)
     input_root = Path(config["input_root"])
     mirror_mode = config.get("collection_mirror_mode", "symlink")
@@ -183,7 +150,9 @@ def sync_once(config: dict[str, Any], logger) -> dict[str, int]:
     removed = 0
     updated_frontmatter = 0
 
-    # 4. Iterate over all manifest entries
+    processed_markdown_paths: set[str] = set()
+
+    # 3. Iterate over all converted Markdown frontmatter entries
     for rel_key, entry in list(manifest.data.get("files", {}).items()):
         if entry.get("status") != "success":
             continue
@@ -200,9 +169,14 @@ def sync_once(config: dict[str, Any], logger) -> dict[str, int]:
         if not bundle_dir.exists():
             continue
 
+        output_md = str(entry.get("output_markdown") or "")
+        if output_md in processed_markdown_paths:
+            continue
+        processed_markdown_paths.add(output_md)
+
         # Get current Zotero collections for this PDF
         new_collections = set(current_zotero.get(pdf_filename, []))
-        old_collections = set(previous_state.get(pdf_filename, []))
+        old_collections = set(entry.get("zotero_collections", []))
 
         if new_collections == old_collections:
             continue
@@ -242,27 +216,15 @@ def sync_once(config: dict[str, Any], logger) -> dict[str, int]:
                     existing_mirrors.remove(mirror_str)
                 removed += 1
 
-        # Update manifest with new mirror_paths
+        # Persist mirror paths and collection labels back into frontmatter.
         entry["mirror_paths"] = existing_mirrors
+        entry["zotero_collections"] = sorted(new_collections) if new_collections else []
         manifest.save()
-
-        # Update YAML frontmatter in the main markdown file
-        output_md = entry.get("output_markdown")
-        if output_md:
-            md_path = Path(output_md)
-            if md_path.exists() and not md_path.is_symlink():
-                sorted_collections = sorted(new_collections) if new_collections else []
-                update_frontmatter_fields(md_path, {
-                    "zotero_collections": sorted_collections,
-                })
-                updated_frontmatter += 1
-                logger.info(
-                    "Updated frontmatter for %s: %s",
-                    pdf_filename, sorted_collections,
-                )
-
-    # 5. Save new state
-    _save_collection_state(state_path, current_zotero)
+        updated_frontmatter += 1
+        logger.info(
+            "Updated frontmatter for %s: %s",
+            pdf_filename, entry["zotero_collections"],
+        )
 
     logger.info(
         "Sync complete: mirrors added=%d removed=%d, frontmatter updated=%d",

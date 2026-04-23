@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from difflib import SequenceMatcher
-import json
 import os
 import re
 import shutil
@@ -13,6 +12,7 @@ try:
     from .common import (
         bundle_dir_for_pdf,
         detect_marker_content_root,
+        detect_marker_version,
         ensure_directories,
         failed_report_path,
         find_all_pdfs,
@@ -21,8 +21,8 @@ try:
         is_supporting_artifact_name,
         load_config,
         main_duplicate_group_pdfs,
-        manifest_path,
         markdown_root,
+        output_root,
         parse_frontmatter,
         pdf_bundle_relpath,
         pdf_fingerprint,
@@ -39,11 +39,13 @@ try:
         utc_now_iso,
         write_frontmatter_markdown,
     )
+    from .frontmatter_index import FrontmatterIndex
     from .zotero_collections import ZoteroCollectionMap
 except ImportError:
     from common import (
         bundle_dir_for_pdf,
         detect_marker_content_root,
+        detect_marker_version,
         ensure_directories,
         failed_report_path,
         find_all_pdfs,
@@ -52,8 +54,8 @@ except ImportError:
         is_supporting_artifact_name,
         load_config,
         main_duplicate_group_pdfs,
-        manifest_path,
         markdown_root,
+        output_root,
         parse_frontmatter,
         pdf_bundle_relpath,
         pdf_fingerprint,
@@ -70,6 +72,7 @@ except ImportError:
         utc_now_iso,
         write_frontmatter_markdown,
     )
+    from frontmatter_index import FrontmatterIndex
     from zotero_collections import ZoteroCollectionMap
 
 SUPPORTING_CONTENT_MARKER = "supportinginformation"
@@ -92,72 +95,10 @@ def _path_match_key(path: Path | str | None) -> str:
     return os.path.normcase(os.path.normpath(normalized))
 
 
-class ManifestStore:
-    def __init__(self, path: Path) -> None:
-        self.path = path
-        self.data = self._load()
+class ManifestStore(FrontmatterIndex):
+    """Backward-compatible name for the frontmatter-backed state index."""
 
-    def _load(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return {"version": 1, "files": {}}
-        with self.path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-
-    def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("w", encoding="utf-8") as f:
-            json.dump(self.data, f, ensure_ascii=False, indent=2)
-
-    def get(self, rel_key: str) -> dict[str, Any] | None:
-        return self.data.setdefault("files", {}).get(rel_key)
-
-    def is_unchanged(self, rel_key: str, fingerprint: dict[str, Any]) -> bool:
-        existing = self.get(rel_key)
-        if not existing or existing.get("status") != "success":
-            return False
-
-        for key, value in fingerprint.items():
-            if existing.get(key) != value:
-                return False
-        return True
-
-    def mark_success(
-        self,
-        rel_key: str,
-        fingerprint: dict[str, Any],
-        source_pdf: Path,
-        output_markdown: Path,
-        raw_dir: Path,
-        metadata: dict[str, Any],
-    ) -> None:
-        entry = {
-            "status": "success",
-            "source_pdf": str(source_pdf),
-            "output_markdown": str(output_markdown),
-            "raw_output_dir": str(raw_dir),
-            "converted_at": utc_now_iso(),
-            **fingerprint,
-            **metadata,
-        }
-        self.data.setdefault("files", {})[rel_key] = entry
-        self.save()
-
-    def mark_failure(self, rel_key: str, source_pdf: Path, error: str) -> None:
-        self.data.setdefault("files", {})[rel_key] = {
-            "status": "failed",
-            "source_pdf": str(source_pdf),
-            "error": error,
-            "failed_at": utc_now_iso(),
-        }
-        self.save()
-
-    def remove_entry(self, rel_key: str) -> bool:
-        files = self.data.get("files", {})
-        if rel_key not in files:
-            return False
-        del files[rel_key]
-        self.save()
-        return True
+    pass
 
 
 def _success_entries_with_output_markdown(
@@ -334,8 +275,8 @@ def delete_pdf_artifacts(
 ) -> dict[str, Any]:
     entry = manifest.get(rel_key)
     if not entry:
-        logger.warning("No manifest entry for rel_key=%s, nothing to delete", rel_key)
-        return {"rel_key": rel_key, "deleted": False, "reason": "no_manifest_entry"}
+        logger.warning("No frontmatter entry for rel_key=%s, nothing to delete", rel_key)
+        return {"rel_key": rel_key, "deleted": False, "reason": "no_frontmatter_entry"}
 
     md_root = markdown_root(config)
     r_root = raw_root(config)
@@ -413,6 +354,67 @@ def delete_pdf_artifacts(
     return {"rel_key": rel_key, "deleted": True, "paths": deleted_paths}
 
 
+def archive_pdf_artifacts(
+    rel_key: str,
+    config: dict[str, Any],
+    manifest: ManifestStore,
+    logger,
+) -> dict[str, Any]:
+    entry = manifest.get(rel_key)
+    if not entry:
+        logger.warning("No frontmatter entry for rel_key=%s, nothing to archive", rel_key)
+        return {"rel_key": rel_key, "archived": False, "reason": "no_frontmatter_entry"}
+
+    md_root = markdown_root(config)
+    archive_root = output_root(config) / "archive" / utc_now_iso().replace(":", "-")
+    archived_paths: list[str] = []
+
+    mirror_paths = entry.get("mirror_paths", [])
+    if mirror_paths:
+        remove_collection_mirrors(mirror_paths, config, logger)
+
+    role = entry.get("document_role", "main")
+    if role == "supporting":
+        output_md = entry.get("output_markdown")
+        if output_md:
+            md_path = Path(output_md)
+            if md_path.exists():
+                destination = archive_root / entry.get("source_relpath", rel_key)
+                destination = destination.with_suffix(".md")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if not is_relative_to(md_path, md_root):
+                    raise ValueError(f"Refusing to archive path outside markdown root: {md_path}")
+                shutil.move(str(md_path), str(destination))
+                archived_paths.append(str(destination))
+
+                assets_dir = md_path.with_name(md_path.stem + "_assets")
+                if assets_dir.exists():
+                    assets_destination = destination.with_name(destination.stem + "_assets")
+                    shutil.move(str(assets_dir), str(assets_destination))
+                    archived_paths.append(str(assets_destination))
+    else:
+        bundle_dir = entry.get("markdown_bundle_dir")
+        if bundle_dir:
+            bundle_path = Path(bundle_dir)
+            if bundle_path.exists():
+                if not is_relative_to(bundle_path, md_root):
+                    raise ValueError(f"Refusing to archive path outside markdown root: {bundle_path}")
+                destination = archive_root / entry.get("source_relpath", rel_key)
+                destination = destination.with_suffix("")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(bundle_path), str(destination))
+                archived_paths.append(str(destination))
+
+    manifest.remove_entry(rel_key)
+    logger.info("Archived artifacts for %s: %s", rel_key, archived_paths)
+    return {
+        "rel_key": rel_key,
+        "archived": bool(archived_paths),
+        "archive_root": str(archive_root),
+        "paths": archived_paths,
+    }
+
+
 def _get_zotero_map(config: dict[str, Any]) -> ZoteroCollectionMap | None:
     """Return a *ZoteroCollectionMap* if ``zotero_db_path`` is configured."""
     db_path = config.get("zotero_db_path")
@@ -428,23 +430,39 @@ def build_conversion_metadata(
     zotero_map: ZoteroCollectionMap | None = None,
 ) -> dict[str, Any]:
     rel_pdf = relative_pdf_path(pdf_path, input_root)
-    metadata = {
+    fingerprint = pdf_fingerprint(
+        pdf_path,
+        use_sha256=config.get("compute_sha256", True),
+    )
+    metadata: dict[str, Any] = {
         "source_pdf": to_posix_path_str(pdf_path),
         "source_relpath": to_posix_path_str(rel_pdf),
         "source_filename": pdf_path.name,
+        "source_size": fingerprint["size"],
+        "source_mtime_ns": fingerprint["mtime_ns"],
         "converter": "marker_single",
+        "marker_version": detect_marker_version(),
         "converted_at": utc_now_iso(),
         "torch_device": config.get("torch_device", "cuda"),
         "force_ocr": bool(config.get("force_ocr", False)),
     }
-    if config.get("compute_sha256", False):
-        metadata["source_sha256"] = pdf_fingerprint(pdf_path, use_sha256=True)["sha256"]
+    if "sha256" in fingerprint:
+        metadata["source_pdf_sha256"] = fingerprint["sha256"]
 
-    # Zotero collection hierarchy
+    # Zotero collection hierarchy + stable item keys
     if zotero_map is not None:
         collections = zotero_map.get_collections_for_pdf(pdf_path.name)
         if collections:
             metadata["zotero_collections"] = collections
+
+        zotero_meta = zotero_map.get_metadata_for_pdf(pdf_path.name)
+        if zotero_meta:
+            if zotero_meta.get("item_key"):
+                metadata["zotero_item_key"] = zotero_meta["item_key"]
+            if zotero_meta.get("attachment_key"):
+                metadata["zotero_attachment_key"] = zotero_meta["attachment_key"]
+            metadata["annotations_count"] = int(zotero_meta.get("annotation_count", 0))
+
     return metadata
 
 
@@ -579,7 +597,7 @@ def dedupe_supporting_markdown_bundle(
             "Removed duplicate supporting markdown: %s -> keep %s%s",
             duplicate_path,
             canonical_path,
-            f" (updated manifest: {updated_rel_keys})" if updated_rel_keys else "",
+            f" (updated frontmatter index: {updated_rel_keys})" if updated_rel_keys else "",
         )
         if duplicate_path == current_markdown_path:
             canonical_for_current = canonical_path
@@ -701,7 +719,7 @@ def _merge_supporting_artifacts_into_bundle(
                 "Merged duplicate supporting markdown from duplicate primary bundle: %s -> %s%s",
                 source_md,
                 matched_target,
-                f" (updated manifest: {updated_rel_keys})" if updated_rel_keys else "",
+                f" (updated frontmatter index: {updated_rel_keys})" if updated_rel_keys else "",
             )
             continue
 
@@ -722,7 +740,7 @@ def _merge_supporting_artifacts_into_bundle(
             "Moved supporting markdown into canonical primary bundle: %s -> %s%s",
             source_md,
             target_md,
-            f" (updated manifest: {updated_rel_keys})" if updated_rel_keys else "",
+            f" (updated frontmatter index: {updated_rel_keys})" if updated_rel_keys else "",
         )
 
     if moved_targets:
@@ -814,7 +832,7 @@ def dedupe_primary_markdown_bundle(
             "Merged duplicate primary markdown bundle: %s -> keep %s%s",
             duplicate_bundle_dir,
             canonical_bundle_dir,
-            f" (updated manifest: {updated_rel_keys})" if updated_rel_keys else "",
+            f" (updated frontmatter index: {updated_rel_keys})" if updated_rel_keys else "",
         )
 
     return canonical_md, canonical_pdf
@@ -1210,8 +1228,8 @@ def convert_one_pdf(
         raise ValueError(f"PDF is outside input_root: {pdf}")
 
     rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
-    fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", False))
-    manifest = ManifestStore(manifest_path(config))
+    fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", True))
+    manifest = ManifestStore(config)
     existing_entry = manifest.get(rel_key)
 
     if not force_reconvert and manifest.is_unchanged(rel_key, fingerprint):
@@ -1232,7 +1250,7 @@ def convert_one_pdf(
             rel_key,
         )
         if existing_entry and existing_entry.get("output_markdown"):
-            logger.info("Current manifest output_markdown: %s", existing_entry["output_markdown"])
+            logger.info("Current frontmatter output_markdown: %s", existing_entry["output_markdown"])
 
     raw_output_dir = raw_dir_for_pdf(pdf, input_root, config)
 
@@ -1338,13 +1356,14 @@ def convert_all_pdfs(
     converted = 0
     skipped = 0
     failed_pdfs: list[Path] = []
+    failure_errors: dict[Path, str] = {}
 
-    manifest = ManifestStore(manifest_path(config))
+    manifest = ManifestStore(config)
 
     # ── First pass ──────────────────────────────────────────────────────
     for pdf in pdfs:
         rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
-        fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", False))
+        fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", True))
         if not force_reconvert and manifest.is_unchanged(rel_key, fingerprint):
             logger.info("Skipping unchanged PDF: %s", rel_key)
             skipped += 1
@@ -1353,10 +1372,11 @@ def convert_all_pdfs(
         try:
             convert_one_pdf(pdf, config_path=config_path, force_reconvert=True)
             converted += 1
-            manifest = ManifestStore(manifest_path(config))
-        except Exception:
+            manifest = ManifestStore(config)
+        except Exception as exc:
             failed_pdfs.append(pdf)
-            manifest = ManifestStore(manifest_path(config))
+            failure_errors[pdf] = str(exc)
+            manifest = ManifestStore(config)
 
     # ── Retry pass (up to MAX_CONVERSION_RETRIES rounds) ────────────────
     if failed_pdfs:
@@ -1376,13 +1396,14 @@ def convert_all_pdfs(
                 convert_one_pdf(pdf, config_path=config_path, force_reconvert=True)
                 converted += 1
                 success = True
-                manifest = ManifestStore(manifest_path(config))
+                manifest = ManifestStore(config)
                 break
-            except Exception:
+            except Exception as exc:
                 logger.warning(
                     "Retry attempt %s/%s failed for: %s", attempt, MAX_CONVERSION_RETRIES, pdf,
                 )
-                manifest = ManifestStore(manifest_path(config))
+                failure_errors[pdf] = str(exc)
+                manifest = ManifestStore(config)
 
         if not success:
             still_failed.append(pdf)
@@ -1390,7 +1411,10 @@ def convert_all_pdfs(
     failed = len(still_failed)
 
     # ── Write final report (only truly persistent failures) ─────────────
-    manifest = ManifestStore(manifest_path(config))
+    manifest = ManifestStore(config)
+    for pdf in still_failed:
+        rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
+        manifest.mark_failure(rel_key, pdf, failure_errors.get(pdf, "conversion failed"))
     write_failed_pdf_report(config, manifest)
 
     summary = {"converted": converted, "skipped": skipped, "failed": failed}

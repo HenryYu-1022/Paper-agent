@@ -83,6 +83,10 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
     else:
         config.pop("zotero_db_path", None)
 
+    # SHA256 fingerprinting defaults on so frontmatter remains stable across
+    # devices when the user has not explicitly set it.
+    config["compute_sha256"] = bool(config.get("compute_sha256", True))
+
     return config
 
 
@@ -456,6 +460,37 @@ def pdf_fingerprint(pdf_path: Path, use_sha256: bool) -> dict[str, Any]:
     if use_sha256:
         data["sha256"] = compute_sha256(pdf_path)
     return data
+
+
+_MARKER_VERSION_CACHE: str | None = None
+
+
+def detect_marker_version() -> str:
+    """Best-effort lookup of the installed Marker package version.
+
+    Returns ``"unknown"`` when the package metadata cannot be located,
+    e.g. when ``marker_cli`` lives in a different Python environment.
+    The result is cached for the lifetime of the process.
+    """
+    global _MARKER_VERSION_CACHE
+    if _MARKER_VERSION_CACHE is not None:
+        return _MARKER_VERSION_CACHE
+
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:
+        _MARKER_VERSION_CACHE = "unknown"
+        return _MARKER_VERSION_CACHE
+
+    for distribution_name in ("marker-pdf", "marker"):
+        try:
+            _MARKER_VERSION_CACHE = version(distribution_name)
+            return _MARKER_VERSION_CACHE
+        except PackageNotFoundError:
+            continue
+
+    _MARKER_VERSION_CACHE = "unknown"
+    return _MARKER_VERSION_CACHE
 
 
 def find_main_markdown(raw_output_dir: Path) -> Path:

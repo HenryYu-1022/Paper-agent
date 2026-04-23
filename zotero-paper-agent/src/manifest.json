@@ -1,0 +1,16 @@
+{
+  "manifest_version": 2,
+  "name": "Zotero Paper Agent",
+  "version": "0.1.0",
+  "description": "Convert Zotero PDF attachments to a local Markdown library and open the Markdown from Zotero.",
+  "author": "HenryYu",
+  "homepage_url": "https://github.com/HenryYu-1022/zotero-gdrive-markdown-project",
+  "applications": {
+    "zotero": {
+      "id": "zotero-paper-agent@henryyu.github.io",
+      "strict_min_version": "7.0",
+      "strict_max_version": "8.*"
+    }
+  }
+}
+

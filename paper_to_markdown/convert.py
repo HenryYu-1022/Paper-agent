@@ -5,10 +5,10 @@ import argparse
 from pathlib import Path
 
 try:
-    from .common import cleanup_marker_raw_root, load_config, manifest_path, setup_logger
+    from .common import cleanup_marker_raw_root, load_config, setup_logger
     from .pipeline import ManifestStore, convert_all_pdfs, convert_one_pdf_with_retries, delete_pdf_artifacts
 except ImportError:
-    from common import cleanup_marker_raw_root, load_config, manifest_path, setup_logger
+    from common import cleanup_marker_raw_root, load_config, setup_logger
     from pipeline import ManifestStore, convert_all_pdfs, convert_one_pdf_with_retries, delete_pdf_artifacts
 
 
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Ignore the manifest and reconvert matching PDFs.",
+        help="Ignore frontmatter status and reconvert matching PDFs.",
     )
     parser.add_argument(
         "--limit",
@@ -46,7 +46,8 @@ def build_parser() -> argparse.ArgumentParser:
 def cleanup_orphans(config_path: str | None = None) -> dict[str, int]:
     config = load_config(config_path)
     logger = setup_logger(config)
-    manifest = ManifestStore(manifest_path(config))
+    manifest = ManifestStore(config)
+    input_root = Path(config["input_root"])
 
     files = dict(manifest.data.get("files", {}))
     cleaned = 0
@@ -54,7 +55,8 @@ def cleanup_orphans(config_path: str | None = None) -> dict[str, int]:
 
     for rel_key, entry in files.items():
         source_pdf = entry.get("source_pdf")
-        if source_pdf and Path(source_pdf).exists():
+        current_source_pdf = input_root / rel_key
+        if (source_pdf and Path(source_pdf).exists()) or current_source_pdf.exists():
             remaining += 1
             continue
 

@@ -21,7 +21,8 @@ English version: [README.md](README.md)
 - 只读读取 Zotero 的 `zotero.sqlite`，获取 collection 层级
 - 创建 symlink 镜像，让 Markdown 库的文件夹结构与 Zotero 一致
 - 在 YAML frontmatter 中写入 `zotero_collections` 标签
-- 自动监听新增 PDF 并同步 collection 变更
+- Zotero 插件可在 Zotero 内重命名 PDF、启动本地 daemon、转换附件、打开 Markdown
+- 转换状态直接读取 Markdown frontmatter，不再依赖 `manifest.json`，适合多端同步
 - 配合 [zotero-attanger](https://github.com/HenryYu-1022/zotero-attanger) 实现 Google Drive 多设备 PDF 同步
 
 ---
@@ -69,18 +70,29 @@ cd paper_to_markdown
 python3 convert.py
 ```
 
-### 第 3 步 —（可选）启动文件监听
+### 第 3 步 —（可选）安装 Zotero 插件
 
-监听 `input_root`，新增/修改 PDF 自动转换：
+构建并安装本地 Zotero 插件：
 
 ```bash
-cd paper_to_markdown
-python3 watch.py
+cd zotero-paper-agent
+./scripts/build.sh
 ```
+
+在 Zotero 的 Tools → Plugins/Add-ons → Install Add-on From File 中安装 `zotero-paper-agent.xpi`。
+然后在插件偏好设置里填写：
+
+- `daemon.py`：本仓库的 `paper_to_markdown/daemon.py`
+- `Python`：安装了本项目依赖的 Python
+- `PDF 根目录`：与 `input_root` 一致
+- `输出根目录`：与 `output_root` 一致
+- `Marker`、`HF 缓存`、`设备`、`空闲退出秒数`
+
+插件会监听 Zotero 附件 add/modify/trash/delete，并通过 stdin/stdout JSON-line 协议调用本地 Python daemon。
 
 ### 第 4 步 —（可选）同步 Zotero 集合层级
 
-把 Zotero 的 collection 层级镜像到 Markdown 库：
+如果你还需要在插件事件流之外同步 `zotero.sqlite` 中的 collection 变化：
 
 ```bash
 cd paper_to_markdown
@@ -107,19 +119,21 @@ output_root/
       Paper1.md       ← 带 YAML frontmatter 的转换结果
     Collection1/
       Paper2/         ← Zotero collection 的 symlink 镜像
-  state/
-    manifest.json     ← 转换状态追踪
   logs/
     app.log
     failed_pdfs.txt
+  archive/            ← 插件/daemon 可选的孤儿归档
 ```
 
-每个 `.md` 文件包含 YAML frontmatter：
+每个 `.md` 文件包含 YAML frontmatter。frontmatter 就是转换状态：
 
 ```yaml
 ---
 source_pdf: /path/to/Paper1.pdf
+source_relpath: Collection/Paper1.pdf
 source_filename: Paper1.pdf
+source_pdf_sha256: ...
+conversion_status: success
 zotero_collections:    # 仅配置 zotero_db_path 后出现
   - 我的文库/硕士论文/光热催化
   - 我的文库/硕士论文/高熵课题
@@ -137,28 +151,29 @@ zotero_collections:    # 仅配置 zotero_db_path 后出现
 | 强制全部重转 | `python3 convert.py --force` |
 | 只测前 N 个 | `python3 convert.py --limit 5` |
 | 清理孤儿 Markdown | `python3 convert.py --cleanup` |
-| 监听新 PDF | `cd paper_to_markdown && python3 watch.py` |
+| 启动 JSON-line daemon | `python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json` |
+| 构建 Zotero 插件 | `cd zotero-paper-agent && ./scripts/build.sh` |
 | 同步 Zotero collection（单次） | `cd paper_to_markdown && python3 sync_collections.py --once` |
 | 同步 Zotero collection（守护） | `cd paper_to_markdown && python3 sync_collections.py` |
 | 查看转换进度 | `python3 monitor.py` |
 
 ---
 
-## 开机自启动
+## JSON-Line Daemon
 
-**macOS：**
+Zotero 插件会自动管理 daemon。手动测试可以运行：
+
 ```bash
-zsh ./watch_autostart.sh install   # 安装
-zsh ./watch_autostart.sh status    # 检查状态
-zsh ./watch_autostart.sh remove    # 卸载
+python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json
 ```
 
-**Windows（管理员运行）：**
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1
+请求示例：
+
+```json
+{"id":"1","command":"convert","path":"/path/to/Paper.pdf"}
 ```
 
-> 自启动只覆盖 PDF 监听器。如需持续同步 Zotero collection，请单独运行 `sync_collections.py`。
+支持 `ping`、`convert`、`archive_orphan`、`delete_orphan`、`cleanup_orphans`、`rescan`、`shutdown`。
 
 ---
 
@@ -177,7 +192,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1
 | `zotero_db_path` | | — | `zotero.sqlite` 路径；填写后启用 collection 镜像 |
 | `collection_mirror_mode` | | `symlink` | `symlink` 或 `copy` |
 | `zotero_sync_interval_seconds` | | `60` | collection 同步轮询间隔 |
-| `watch_initial_scan` | | `true` | 监听器启动时是否先处理已有 PDF |
+| `daemon_idle_timeout_seconds` | | `300` | daemon 空闲多少秒后退出；`0` 表示不自动退出 |
 | `python_path` | | — | Python 绝对路径（后台自启动用） |
 | `log_level` | | `INFO` | 日志级别 |
 
@@ -188,12 +203,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\watch_autostart.ps1
 | 文件 | 作用 |
 |---|---|
 | `paper_to_markdown/convert.py` | 手动批量转换 CLI |
-| `paper_to_markdown/watch.py` | 文件监听守护进程 |
+| `paper_to_markdown/daemon.py` | Zotero 插件使用的 JSON-line daemon |
 | `paper_to_markdown/sync_collections.py` | Zotero collection 同步守护进程 |
 | `paper_to_markdown/settings.json` | 你的本地配置（从 `.example.json` 复制） |
 | `paper_to_markdown/pipeline.py` | 核心转换引擎（被导入，不直接运行） |
+| `paper_to_markdown/frontmatter_index.py` | 从 Markdown frontmatter 启动扫描得到的内存索引 |
 | `paper_to_markdown/common.py` | 公共工具函数（被导入） |
 | `paper_to_markdown/zotero_collections.py` | Zotero 数据库读取器（被导入） |
+| `zotero-paper-agent/` | Zotero 7 插件源码和构建脚本 |
 | `monitor.py` | 转换进度查看器 |
 | `backfill.py` | 补齐缺失的 supporting PDF |
 

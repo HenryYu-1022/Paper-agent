@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -9,7 +8,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from paper_to_markdown.common import find_all_pdfs, load_config, logs_root, manifest_path
+from paper_to_markdown.common import find_all_pdfs, load_config, logs_root
+from paper_to_markdown.frontmatter_index import FrontmatterIndex
 
 
 LOG_LINE_RE = re.compile(
@@ -75,21 +75,15 @@ def parse_timestamp(raw: str) -> datetime:
 
 def load_manifest_summary(config: dict[str, Any]) -> dict[str, int]:
     input_root = Path(config["input_root"])
-    manifest_file = manifest_path(config)
     total_pdfs = len(find_all_pdfs(input_root))
-
-    if not manifest_file.exists():
-        return {"total": total_pdfs, "success": 0, "failed": 0}
-
-    data = json.loads(manifest_file.read_text(encoding="utf-8"))
+    index = FrontmatterIndex(config)
     success = 0
     failed = 0
 
-    for entry in data.get("files", {}).values():
+    for rel_key, entry in index.data.get("files", {}).items():
         source_pdf = entry.get("source_pdf")
-        if not source_pdf:
-            continue
-        if not Path(source_pdf).exists():
+        current_source_pdf = input_root / rel_key
+        if source_pdf and not Path(source_pdf).exists() and not current_source_pdf.exists():
             continue
         if entry.get("status") == "success":
             success += 1
@@ -218,8 +212,8 @@ def build_report(config_path: str | None = None) -> str:
 
     lines = [
         f"Input PDFs: {manifest_summary['total']}",
-        f"Manifest success: {manifest_summary['success']}",
-        f"Manifest failed: {manifest_summary['failed']}",
+        f"Frontmatter success: {manifest_summary['success']}",
+        f"Frontmatter failed: {manifest_summary['failed']}",
     ]
 
     if latest_batch is None:
