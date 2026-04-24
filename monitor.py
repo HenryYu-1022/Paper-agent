@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,49 @@ from typing import Any
 
 from paper_to_markdown.common import find_all_pdfs, load_config, relative_pdf_path, to_posix_path_str
 from paper_to_markdown.frontmatter_index import FrontmatterIndex
+
+
+def format_duration(seconds: float) -> str:
+    total_seconds = max(int(round(seconds)), 0)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    if hours:
+        return f"{hours}h {minutes}m {secs}s"
+    if minutes:
+        return f"{minutes}m {secs}s"
+    return f"{secs}s"
+
+
+class EtaTracker:
+    def __init__(self) -> None:
+        self._last_timestamp: float | None = None
+        self._last_remaining: int | None = None
+
+    def estimate(self, remaining: int) -> str | None:
+        now = time.time()
+
+        if self._last_timestamp is None or self._last_remaining is None:
+            self._last_timestamp = now
+            self._last_remaining = remaining
+            return None
+
+        elapsed = now - self._last_timestamp
+        completed = self._last_remaining - remaining
+
+        self._last_timestamp = now
+        self._last_remaining = remaining
+
+        if remaining <= 0:
+            return "0s"
+        if elapsed <= 0 or completed <= 0:
+            return None
+
+        items_per_second = completed / elapsed
+        if items_per_second <= 0:
+            return None
+
+        return format_duration(remaining / items_per_second)
 
 
 def load_index_summary(config: dict[str, Any]) -> dict[str, Any]:
@@ -48,7 +92,12 @@ def load_index_summary(config: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_report(config_path: str | None = None, *, list_limit: int = 20) -> str:
+def build_report(
+    config_path: str | None = None,
+    *,
+    list_limit: int = 20,
+    eta_text: str | None = None,
+) -> str:
     config = load_config(config_path)
     summary = load_index_summary(config)
     needs_conversion = summary["needs_conversion"]
@@ -62,6 +111,7 @@ def build_report(config_path: str | None = None, *, list_limit: int = 20) -> str
         f"Input PDFs matched to Markdown: {summary['matched_success']}",
         f"Input PDFs with failed Markdown status: {summary['matched_failed']}",
         f"Input PDFs needing conversion: {len(needs_conversion)}",
+        f"Estimated time remaining: {eta_text or 'unknown'}",
         f"Markdown success entries without current input PDF: {len(stale_markdown_index)}",
     ]
 
@@ -110,16 +160,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     args = build_parser().parse_args()
 
     if not args.watch:
         print(build_report(args.config, list_limit=max(args.list_limit, 0)))
         return
 
+    eta_tracker = EtaTracker()
+
     while True:
+        summary = load_index_summary(load_config(args.config))
+        eta_text = eta_tracker.estimate(len(summary["needs_conversion"]))
+
         print("=" * 60)
         print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        print(build_report(args.config, list_limit=max(args.list_limit, 0)))
+        print(
+            build_report(
+                args.config,
+                list_limit=max(args.list_limit, 0),
+                eta_text=eta_text,
+            )
+        )
         time.sleep(max(args.interval, 1))
 
 

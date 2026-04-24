@@ -1005,6 +1005,11 @@ def remove_primary_bundle_content(bundle_dir: Path, allowed_root: Path) -> None:
         bundle_dir.mkdir(parents=True, exist_ok=True)
         return
 
+    if not bundle_dir.is_dir():
+        safe_unlink(bundle_dir, allowed_root)
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        return
+
     for child in bundle_dir.iterdir():
         if is_supporting_artifact_name(child.name):
             continue
