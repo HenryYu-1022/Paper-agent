@@ -150,19 +150,13 @@ def existing_markdown_for_pdf(
     manifest_entry: dict[str, Any] | None = None,
     markdown_stem_index: dict[str, Path] | None = None,
 ) -> Path | None:
+    del markdown_stem_index
+
     if output_markdown_matches_current_layout(pdf_path, input_root, config, manifest_entry):
         output_markdown = str(manifest_entry.get("output_markdown", "")) if manifest_entry else ""
         if output_markdown:
             return Path(output_markdown)
-
-    expected_markdown = _expected_output_markdown_for_pdf(pdf_path, input_root, config)
-    if expected_markdown.exists():
-        return expected_markdown
-
-    if supporting_source_info(pdf_path):
-        return None
-
-    return _existing_main_markdown_by_stem(pdf_path, config, markdown_stem_index)
+    return None
 
 
 class ManifestStore(FrontmatterIndex):
@@ -1442,8 +1436,6 @@ def convert_all_pdfs(
     failure_errors: dict[Path, str] = {}
 
     manifest = ManifestStore(config)
-    markdown_stem_index = _build_markdown_stem_index(config)
-
     # ── First pass ──────────────────────────────────────────────────────
     for pdf in pdfs:
         rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
@@ -1455,7 +1447,6 @@ def convert_all_pdfs(
                 input_root,
                 config,
                 existing_entry,
-                markdown_stem_index=markdown_stem_index,
             )
             if existing_markdown is not None:
                 logger.info("Skipping existing Markdown PDF: %s -> %s", rel_key, existing_markdown)
@@ -1471,7 +1462,6 @@ def convert_all_pdfs(
             convert_one_pdf(pdf, config_path=config_path, force_reconvert=force_reconvert)
             converted += 1
             manifest = ManifestStore(config)
-            markdown_stem_index = _build_markdown_stem_index(config)
         except Exception as exc:
             failed_pdfs.append(pdf)
             failure_errors[pdf] = str(exc)
