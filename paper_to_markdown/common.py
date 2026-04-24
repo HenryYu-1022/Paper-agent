@@ -60,21 +60,31 @@ def _normalize_command_value(value: str) -> str:
     return command
 
 
+RUN_MODES = {"all-in-one", "runner", "controller"}
+
+
 def load_config(config_path: str | None = None) -> dict[str, Any]:
     path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
     with path.open("r", encoding="utf-8") as f:
         config = json.load(f)
 
-    for field in ["input_root", "output_root", "hf_home"]:
+    run_mode = str(config.get("run_mode", "all-in-one")).strip()
+    if run_mode not in RUN_MODES:
+        raise ValueError(f"Invalid run_mode '{run_mode}'. Must be one of: {', '.join(sorted(RUN_MODES))}")
+    config["run_mode"] = run_mode
+
+    for field in ["input_root", "output_root"]:
         config[field] = _resolve_path_value(_require_non_empty(config, field))
 
-    config["marker_cli"] = _normalize_command_value(_require_non_empty(config, "marker_cli"))
+    if run_mode != "controller":
+        config["hf_home"] = _resolve_path_value(_require_non_empty(config, "hf_home"))
+        config["marker_cli"] = _normalize_command_value(_require_non_empty(config, "marker_cli"))
 
-    marker_repo_root = str(config.get("marker_repo_root", "")).strip()
-    if marker_repo_root:
-        config["marker_repo_root"] = _resolve_path_value(marker_repo_root)
-    else:
-        config.pop("marker_repo_root", None)
+        marker_repo_root = str(config.get("marker_repo_root", "")).strip()
+        if marker_repo_root:
+            config["marker_repo_root"] = _resolve_path_value(marker_repo_root)
+        else:
+            config.pop("marker_repo_root", None)
 
     # Optional: Zotero database path for collection hierarchy mirroring
     zotero_db_path = str(config.get("zotero_db_path", "")).strip()
@@ -164,8 +174,10 @@ def ensure_directories(config: dict[str, Any]) -> None:
         raw_root(config),
         state_root(config),
         logs_root(config),
-        Path(config["hf_home"]),
     }
+    hf_home = str(config.get("hf_home", "")).strip()
+    if hf_home:
+        paths.add(Path(hf_home))
 
     for path in sorted(paths, key=lambda item: len(str(item))):
         path.mkdir(parents=True, exist_ok=True)

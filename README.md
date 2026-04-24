@@ -27,6 +27,91 @@
 
 ---
 
+## Quick Start — Three Decisions
+
+> **You only need to make three decisions.** Everything else has a safe default.
+
+### Decision 1 — Single machine or two machines?
+
+| Mode | When to use | `run_mode` value |
+|---|---|---|
+| **Single machine** | One computer runs everything | `all-in-one` (default, no need to set) |
+| **Win runner + Mac controller** | Windows GPU does conversion, Mac handles cleanup | `runner` on Win, `controller` on Mac |
+
+---
+
+### Decision 2 — Where are your PDFs and where should Markdown go?
+
+Set `input_root` (your PDF folder) and `output_root` (where Markdown will be written). For two-machine setups, both machines point to the same Google Drive folders — each machine uses its own local mount path.
+
+---
+
+### Decision 3 — Where is Marker? (runner / single machine only)
+
+Set `marker_cli` to the command name (`marker_single`) or its absolute path.
+
+---
+
+### Minimum `settings.json`
+
+**Single machine:**
+
+```json
+{
+  "input_root":   "/path/to/your/PDF/folder",
+  "output_root":  "/path/to/your/Markdown/output",
+  "marker_cli":   "marker_single",
+  "hf_home":      "/path/to/.cache/huggingface",
+  "torch_device": "mps"
+}
+```
+
+> `torch_device`: NVIDIA GPU → `"cuda"` · Apple Silicon → `"mps"` · No GPU → `"cpu"`
+
+**Two machines — Windows runner `settings.json`:**
+
+```json
+{
+  "run_mode":     "runner",
+  "input_root":   "G:/Shared/PDFs",
+  "output_root":  "G:/Shared/Markdown",
+  "marker_cli":   "marker_single",
+  "hf_home":      "C:/Users/you/.cache/huggingface",
+  "torch_device": "cuda"
+}
+```
+
+**Two machines — Mac controller `settings.json`:**
+
+```json
+{
+  "run_mode":    "controller",
+  "input_root":  "/Volumes/GoogleDrive/PDFs",
+  "output_root": "/Volumes/GoogleDrive/Markdown"
+}
+```
+
+---
+
+### Run
+
+**Windows / single machine — convert PDFs:**
+
+```bash
+cd paper_to_markdown
+python3 convert.py
+```
+
+**Mac controller — scan for orphaned Markdown and delete them when their PDF is gone:**
+
+```bash
+python3 -m paper_to_markdown.verify --apply --watch
+```
+
+> **Note:** Neither script starts automatically. Run them manually, or register them with Windows Task Scheduler / macOS launchd for periodic execution.
+
+---
+
 ## Prerequisites
 
 | Requirement | Notes |
@@ -156,6 +241,9 @@ zotero_collections:    # only when zotero_db_path is configured
 | Sync Zotero collections (once) | `cd paper_to_markdown && python3 sync_collections.py --once` |
 | Sync Zotero collections (daemon) | `cd paper_to_markdown && python3 sync_collections.py` |
 | Check conversion progress | `python3 monitor.py` |
+| Scan for orphaned Markdown (dry-run) | `python3 -m paper_to_markdown.verify` |
+| Delete orphaned Markdown immediately | `python3 -m paper_to_markdown.verify --apply` |
+| Watch and auto-delete orphans (controller) | `python3 -m paper_to_markdown.verify --apply --watch` |
 
 ---
 
@@ -202,7 +290,8 @@ Config file: `paper_to_markdown/settings.json`
 
 | File | What it does |
 |---|---|
-| `paper_to_markdown/convert.py` | Manual batch conversion CLI |
+| `paper_to_markdown/convert.py` | Manual batch conversion CLI (runner / all-in-one) |
+| `paper_to_markdown/verify.py` | Controller-mode orphan scanner: deletes Markdown when its PDF is gone |
 | `paper_to_markdown/daemon.py` | JSON-line daemon used by the Zotero plugin |
 | `paper_to_markdown/sync_collections.py` | Zotero collection sync daemon |
 | `paper_to_markdown/settings.json` | Your local config (create from `.example.json`) |

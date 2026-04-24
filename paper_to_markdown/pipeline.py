@@ -1082,6 +1082,9 @@ def create_collection_mirrors(
     Returns a list of mirror directory paths (as posix strings) that were created.
     The bundle's own physical location is excluded from mirroring.
     """
+    if config.get("run_mode") == "runner":
+        return []
+
     if zotero_map is None:
         return []
 

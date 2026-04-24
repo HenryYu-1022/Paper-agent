@@ -12,6 +12,11 @@ except ImportError:
     from pipeline import ManifestStore, convert_all_pdfs, convert_one_pdf_with_retries, delete_pdf_artifacts
 
 
+def exit_if_controller_mode(config: dict[str, object], parser: argparse.ArgumentParser) -> None:
+    if config.get("run_mode") == "controller":
+        parser.exit(1, "controller mode must not run convert.py; use verify.py instead.\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Convert paper PDFs to markdown.")
     parser.add_argument(
@@ -75,6 +80,8 @@ def cleanup_orphans(config_path: str | None = None) -> dict[str, int]:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    config = load_config(args.config)
+    exit_if_controller_mode(config, parser)
 
     try:
         if args.cleanup:
@@ -97,7 +104,6 @@ def main() -> None:
         print(summary)
     finally:
         try:
-            config = load_config(args.config)
             logger = setup_logger(config)
             cleanup_marker_raw_root(config, logger)
         except Exception:

@@ -27,6 +27,92 @@ English version: [README.md](README.md)
 
 ---
 
+## 三步上手
+
+> **只需要做三个决定。** 其余配置都有安全的默认值。
+
+### 第一步 — 单机还是双机？
+
+| 模式 | 适用场景 | `run_mode` |
+|---|---|---|
+| **单机** | 一台电脑搞定一切 | `all-in-one`（默认，可不填） |
+| **Win 跑转换 + Mac 做管理** | Windows GPU 执行转换，Mac 负责清理孤儿 | Win 填 `runner`，Mac 填 `controller` |
+
+---
+
+### 第二步 — PDF 在哪，Markdown 输出到哪？
+
+设置 `input_root`（你的 PDF 文件夹）和 `output_root`（Markdown 写入的位置）。
+双机模式下两台电脑指向同一个 Google Drive 文件夹，各自填本机的挂载路径即可。
+
+---
+
+### 第三步 — Marker 在哪？（runner / 单机才需要）
+
+设置 `marker_cli`，填命令名（`marker_single`）或绝对路径。
+
+---
+
+### 最小 `settings.json`
+
+**单机：**
+
+```json
+{
+  "input_root":   "/你的/PDF/文件夹",
+  "output_root":  "/你的/Markdown/输出目录",
+  "marker_cli":   "marker_single",
+  "hf_home":      "/你的/.cache/huggingface",
+  "torch_device": "mps"
+}
+```
+
+> `torch_device`：NVIDIA GPU → `"cuda"` · Apple Silicon → `"mps"` · 无 GPU → `"cpu"`
+
+**双机 — Windows runner `settings.json`：**
+
+```json
+{
+  "run_mode":     "runner",
+  "input_root":   "G:/Shared/PDFs",
+  "output_root":  "G:/Shared/Markdown",
+  "marker_cli":   "marker_single",
+  "hf_home":      "C:/Users/you/.cache/huggingface",
+  "torch_device": "cuda"
+}
+```
+
+**双机 — Mac controller `settings.json`：**
+
+```json
+{
+  "run_mode":    "controller",
+  "input_root":  "/Volumes/GoogleDrive/PDFs",
+  "output_root": "/Volumes/GoogleDrive/Markdown"
+}
+```
+
+---
+
+### 运行
+
+**Windows / 单机 — 转换 PDF：**
+
+```bash
+cd paper_to_markdown
+python3 convert.py
+```
+
+**Mac controller — 巡检孤儿并在 PDF 消失后立即删除对应 Markdown：**
+
+```bash
+python3 -m paper_to_markdown.verify --apply --watch
+```
+
+> **注意：** 这两个脚本都不会自动启动。手动运行，或注册到 Windows 任务计划程序 / macOS launchd 实现定时执行。
+
+---
+
 ## 运行前准备
 
 | 依赖 | 说明 |
@@ -156,6 +242,9 @@ zotero_collections:    # 仅配置 zotero_db_path 后出现
 | 同步 Zotero collection（单次） | `cd paper_to_markdown && python3 sync_collections.py --once` |
 | 同步 Zotero collection（守护） | `cd paper_to_markdown && python3 sync_collections.py` |
 | 查看转换进度 | `python3 monitor.py` |
+| 巡检孤儿 Markdown（只看不删） | `python3 -m paper_to_markdown.verify` |
+| 立即删除孤儿 Markdown | `python3 -m paper_to_markdown.verify --apply` |
+| 持续巡检并自动删除（controller 端） | `python3 -m paper_to_markdown.verify --apply --watch` |
 
 ---
 
@@ -202,7 +291,8 @@ python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json
 
 | 文件 | 作用 |
 |---|---|
-| `paper_to_markdown/convert.py` | 手动批量转换 CLI |
+| `paper_to_markdown/convert.py` | 手动批量转换 CLI（runner / 单机） |
+| `paper_to_markdown/verify.py` | controller 端孤儿巡检：PDF 消失后立即删除对应 Markdown |
 | `paper_to_markdown/daemon.py` | Zotero 插件使用的 JSON-line daemon |
 | `paper_to_markdown/sync_collections.py` | Zotero collection 同步守护进程 |
 | `paper_to_markdown/settings.json` | 你的本地配置（从 `.example.json` 复制） |
