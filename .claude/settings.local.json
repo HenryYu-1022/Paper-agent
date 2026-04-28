@@ -29,7 +29,16 @@
       "Bash(python -m pytest tests/test_monitor.py -v)",
       "Bash(./.venv/Scripts/python.exe -m pytest tests/)",
       "Bash(./.venv/Scripts/python.exe -m pytest tests/ --ignore=tests/test_sha256_fallback.py -v)",
-      "Bash(./.venv/Scripts/python.exe -m paper_to_markdown.postprocess_markdown --config paper_to_markdown/settings.json)"
+      "Bash(./.venv/Scripts/python.exe -m paper_to_markdown.postprocess_markdown --config paper_to_markdown/settings.json)",
+      "Bash(/Users/henry/Code/zotero-gdrive-markdown-project/.venv/bin/python -c \"import monitor; print\\('import ok'\\); print\\('is_controller_mode:', monitor.is_controller_mode\\({'run_mode':'controller'}\\)\\)\")",
+      "Bash(timeout 60 .venv/bin/python monitor.py --no-convert --list-limit 0)",
+      "Bash(.venv/bin/python monitor.py --no-convert --list-limit 0)",
+      "Bash(.venv/bin/python monitor.py --list-limit 0)",
+      "Bash(.venv/bin/python -m paper_to_markdown.postprocess_markdown)",
+      "Bash(.venv/bin/python monitor.py --no-convert --list-limit 10)",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python)",
+      "Bash(.venv/bin/python monitor.py --no-convert --list-limit 5)"
     ]
   }
 }

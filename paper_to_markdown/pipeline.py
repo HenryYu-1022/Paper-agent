@@ -46,6 +46,7 @@ try:
         write_frontmatter_markdown,
     )
     from .frontmatter_index import FrontmatterIndex
+    from .organize_figures import organize_bundle
     from .zotero_collections import ZoteroCollectionMap
 except ImportError:
     from common import (
@@ -81,6 +82,7 @@ except ImportError:
         write_frontmatter_markdown,
     )
     from frontmatter_index import FrontmatterIndex
+    from organize_figures import organize_bundle
     from zotero_collections import ZoteroCollectionMap
 
 SUPPORTING_CONTENT_MARKER = "supportinginformation"
@@ -1425,6 +1427,12 @@ def materialize_primary_bundle(
     metadata = build_conversion_metadata(pdf_path, input_root, config, zotero_map=zotero_map)
     metadata["document_role"] = "main"
     write_frontmatter_markdown(main_bundle_md, metadata)
+
+    try:
+        organize_bundle(bundle_dir, apply=True, logger=logger)
+    except Exception as exc:
+        if logger is not None:
+            logger.warning("organize_bundle failed for %s: %s", bundle_dir, exc)
 
     return main_bundle_md, []
 

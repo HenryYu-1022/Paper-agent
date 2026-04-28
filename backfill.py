@@ -41,8 +41,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
     config = load_config(args.config)
+    if str(config.get("run_mode", "")).strip() == "controller":
+        parser.exit(1, "controller mode must not run backfill.py; backfill invokes marker on the runner host.\n")
     logger = setup_logger(config, logger_name="paper_to_markdown.backfill")
     input_root = Path(config["input_root"])
     manifest = ManifestStore(manifest_path(config))

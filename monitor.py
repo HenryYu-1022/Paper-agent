@@ -17,13 +17,20 @@ from paper_to_markdown.common import (
     find_all_pdfs,
     load_config,
     logs_root,
+    markdown_root,
     relative_pdf_path,
     setup_logger,
     to_posix_path_str,
 )
 from paper_to_markdown.frontmatter_index import FrontmatterIndex
+from paper_to_markdown.organize_figures import organize_library
 from paper_to_markdown.pipeline import convert_one_pdf_with_retries
+from paper_to_markdown.postprocess_markdown import postprocess_library
 from paper_to_markdown.verify import _remove_orphan, _scan
+
+
+def is_controller_mode(config: dict[str, Any]) -> bool:
+    return str(config.get("run_mode", "")).strip() == "controller"
 
 STILL_ACTIVE = 259
 ERROR_ACCESS_DENIED = 5
@@ -236,6 +243,33 @@ def apply_pending_conversions(
             errors.append({"rel_key": rel_key, "error": str(exc)})
 
     return {"converted": converted, "errors": errors, "skipped_running": False}
+
+
+def apply_controller_postprocess(
+    config: dict[str, Any],
+    apply: bool,
+    logger: Any,
+) -> dict[str, Any]:
+    try:
+        summary = postprocess_library(config, apply=apply)
+    except Exception as exc:
+        logger.error("Controller postprocess failed: %s", exc)
+        return {"summary": {}, "error": str(exc), "applied": apply}
+    logger.info(
+        "Controller postprocess (apply=%s): %s",
+        apply,
+        summary,
+    )
+
+    figures_totals: dict[str, int] = {}
+    try:
+        md_root = markdown_root(config)
+        if md_root.exists():
+            figures_totals = organize_library(md_root, apply=apply, logger=logger)
+    except Exception as exc:
+        logger.error("organize_library failed: %s", exc)
+
+    return {"summary": summary, "applied": apply, "figures": figures_totals}
 
 
 def apply_orphan_cleanup(
@@ -461,7 +495,9 @@ def build_report(
 
     eta_display = eta_text
     if eta_display is None:
-        if not pending_conversion:
+        if is_controller_mode(config):
+            eta_display = "n/a (controller: marker runs on the runner host)"
+        elif not pending_conversion:
             eta_display = "0s"
             if summary["matched_failed"]:
                 eta_display += " (failed PDFs need retry)"
@@ -595,7 +631,8 @@ def main() -> None:
         if active and active_logger is not None:
             config = load_config(args.config)
             current_conversion = load_current_conversion(config)
-            if current_conversion_is_active(current_conversion):
+            controller = is_controller_mode(config)
+            if not controller and current_conversion_is_active(current_conversion):
                 active_logger.info(
                     "Monitor report only because a conversion is already active "
                     "(pid=%s, source=%s)",
@@ -603,7 +640,9 @@ def main() -> None:
                     current_conversion.get("source_relpath"),
                 )
                 return
-            if args.convert:
+            if args.convert and controller:
+                apply_controller_postprocess(config, args.apply, active_logger)
+            elif args.convert:
                 summary = load_index_summary(config)
                 conv = apply_pending_conversions(
                     config, summary, args.config, current_conversion, active_logger
@@ -645,25 +684,29 @@ def main() -> None:
             )
         )
         if args.convert and active_logger is not None:
+            controller = is_controller_mode(config)
             try:
-                if current_conversion_is_active(current_conversion):
-                    active_logger.info(
-                        "Monitor report only because a conversion is already active "
-                        "(pid=%s, source=%s)",
-                        current_conversion.get("pid"),
-                        current_conversion.get("source_relpath"),
+                if controller:
+                    apply_controller_postprocess(config, args.apply, active_logger)
+                else:
+                    if current_conversion_is_active(current_conversion):
+                        active_logger.info(
+                            "Monitor report only because a conversion is already active "
+                            "(pid=%s, source=%s)",
+                            current_conversion.get("pid"),
+                            current_conversion.get("source_relpath"),
+                        )
+                        time.sleep(max(args.interval, 1))
+                        continue
+                    conv = apply_pending_conversions(
+                        config, summary, args.config, current_conversion, active_logger
                     )
-                    time.sleep(max(args.interval, 1))
-                    continue
-                conv = apply_pending_conversions(
-                    config, summary, args.config, current_conversion, active_logger
-                )
-                active_logger.info(
-                    "Converted this cycle: %s (errors %s, skipped_running=%s)",
-                    len(conv["converted"]),
-                    len(conv["errors"]),
-                    conv["skipped_running"],
-                )
+                    active_logger.info(
+                        "Converted this cycle: %s (errors %s, skipped_running=%s)",
+                        len(conv["converted"]),
+                        len(conv["errors"]),
+                        conv["skipped_running"],
+                    )
             except Exception as exc:
                 active_logger.error("Conversion cycle failed: %s", exc)
         if args.apply and active_logger is not None:
