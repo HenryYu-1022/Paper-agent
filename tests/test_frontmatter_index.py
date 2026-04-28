@@ -143,5 +143,114 @@ Body
             self.assertEqual(index.get("AI/Paper 2.pdf")["output_markdown"], str(md_path))
 
 
+    def test_register_alias_for_rel_key_writes_alias_and_reloads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config = make_config(tmp_path)
+            input_root = Path(config["input_root"])
+            moved_pdf = input_root / "B" / "Paper.pdf"
+            moved_pdf.parent.mkdir(parents=True)
+            moved_pdf.write_bytes(b"pdf-bytes")
+
+            md_path = tmp_path / "output" / "markdown" / "A" / "Paper" / "Paper.md"
+            md_path.parent.mkdir(parents=True)
+            md_path.write_text(
+                """---
+source_relpath: A/Paper.pdf
+source_filename: Paper.pdf
+source_pdf_sha256: sha-abc
+document_role: main
+---
+
+## Full Text
+Body
+""",
+                encoding="utf-8",
+            )
+
+            index = FrontmatterIndex(config)
+            self.assertIsNotNone(index.get("A/Paper.pdf"))
+            self.assertIsNone(index.get("B/Paper.pdf"))
+
+            added = index.register_alias_for_rel_key(
+                existing_rel_key="A/Paper.pdf",
+                new_rel_key="B/Paper.pdf",
+                source_pdf=moved_pdf,
+                fingerprint={"sha256": "sha-abc", "size": 9, "mtime_ns": 111},
+            )
+
+            self.assertTrue(added)
+            metadata, _body = parse_frontmatter(md_path)
+            self.assertEqual(metadata["source_relpath"], "A/Paper.pdf")
+            aliases = metadata.get("source_aliases", [])
+            self.assertEqual(len(aliases), 1)
+            self.assertEqual(aliases[0]["source_relpath"], "B/Paper.pdf")
+            self.assertEqual(aliases[0]["source_pdf_sha256"], "sha-abc")
+
+            self.assertIsNotNone(index.get("B/Paper.pdf"))
+            self.assertEqual(index.get("B/Paper.pdf")["output_markdown"], str(md_path))
+
+    def test_register_alias_for_rel_key_noop_for_missing_entry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config = make_config(tmp_path)
+            index = FrontmatterIndex(config)
+            pdf_path = Path(config["input_root"]) / "unknown.pdf"
+            pdf_path.parent.mkdir(parents=True, exist_ok=True)
+            pdf_path.write_bytes(b"x")
+            self.assertFalse(
+                index.register_alias_for_rel_key(
+                    existing_rel_key="missing.pdf",
+                    new_rel_key="new.pdf",
+                    source_pdf=pdf_path,
+                    fingerprint={"sha256": "x"},
+                )
+            )
+
+    def test_scan_prefers_primary_markdown_over_collection_copy_for_same_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            config = make_config(tmp_path)
+            output_root = tmp_path / "output"
+            primary_md = output_root / "markdown" / "Library" / "Paper" / "Paper.md"
+            mirror_md = output_root / "markdown" / "Library" / "Collection" / "Paper" / "Paper.md"
+            primary_md.parent.mkdir(parents=True)
+            mirror_md.parent.mkdir(parents=True)
+
+            primary_md.write_text(
+                """---
+source_relpath: Library/Paper.pdf
+source_filename: Paper.pdf
+conversion_status: success
+document_role: main
+markdown_relpath: Library/Paper/Paper.md
+---
+
+## Full Text
+Primary
+""",
+                encoding="utf-8",
+            )
+            mirror_md.write_text(
+                """---
+source_relpath: Library/Paper.pdf
+source_filename: Paper.pdf
+document_role: main
+markdown_relpath: Library/Paper/Paper.md
+---
+
+## Full Text
+Mirror
+""",
+                encoding="utf-8",
+            )
+
+            index = FrontmatterIndex(config)
+            entry = index.get("Library/Paper.pdf")
+
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry["output_markdown"], str(primary_md))
+
+
 if __name__ == "__main__":
     unittest.main()

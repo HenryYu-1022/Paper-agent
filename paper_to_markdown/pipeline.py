@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import ctypes
 from difflib import SequenceMatcher
+import json
 import os
 import re
 import shutil
 import subprocess
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 try:
     from .common import (
+        conversion_lock_path,
         bundle_dir_for_pdf,
+        conversion_status_path,
         detect_marker_content_root,
         detect_marker_version,
         ensure_directories,
@@ -43,7 +49,9 @@ try:
     from .zotero_collections import ZoteroCollectionMap
 except ImportError:
     from common import (
+        conversion_lock_path,
         bundle_dir_for_pdf,
+        conversion_status_path,
         detect_marker_content_root,
         detect_marker_version,
         ensure_directories,
@@ -82,6 +90,154 @@ DUPLICATE_MARKDOWN_MIN_LENGTH_RATIO = 0.97
 DUPLICATE_MARKDOWN_MAX_CHAR_DELTA = 1200
 DUPLICATE_MARKDOWN_SIMILARITY_THRESHOLD = 0.985
 SUPPORTING_MARKDOWN_FILE_RE = re.compile(r"^supporting(?:_(?P<index>\d+))?\.md$")
+_HELD_CONVERSION_LOCKS: set[Path] = set()
+STILL_ACTIVE = 259
+ERROR_ACCESS_DENIED = 5
+ERROR_INVALID_PARAMETER = 87
+
+
+def _windows_process_is_running(pid_int: int) -> bool | None:
+    process_query_limited_information = 0x1000
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid_int)
+    if not handle:
+        error = kernel32.GetLastError()
+        if error == ERROR_ACCESS_DENIED:
+            return True
+        if error == ERROR_INVALID_PARAMETER:
+            return False
+        return None
+
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return None
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def process_is_running(pid: Any) -> bool | None:
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return None
+    if pid_int <= 0:
+        return None
+    if os.name == "nt":
+        return _windows_process_is_running(pid_int)
+    try:
+        os.kill(pid_int, 0)
+        return True
+    except OSError:
+        return False
+
+
+class ConversionLock:
+    def __init__(self, config: dict[str, Any], owner: str) -> None:
+        self.config = config
+        self.owner = owner
+        self.path = conversion_lock_path(config)
+        self.token = f"{os.getpid()}-{time.time()}-{uuid.uuid4()}"
+        self.acquired = False
+        self.reentrant = False
+
+    def __enter__(self) -> "ConversionLock":
+        resolved_path = self.path.resolve()
+        if resolved_path in _HELD_CONVERSION_LOCKS:
+            self.reentrant = True
+            return self
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "pid": os.getpid(),
+            "owner": self.owner,
+            "started_at": utc_now_iso(),
+            "started_at_epoch": time.time(),
+            "token": self.token,
+        }
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        try:
+            fd = os.open(str(self.path), flags)
+        except FileExistsError as exc:
+            existing = self._read_existing_lock()
+            if process_is_running(existing.get("pid")) is False:
+                try:
+                    self.path.unlink()
+                except FileNotFoundError:
+                    pass
+                try:
+                    fd = os.open(str(self.path), flags)
+                except FileExistsError:
+                    raise RuntimeError(
+                        "Another conversion appears to be running. "
+                        f"Lock file: {self.path}. "
+                        "A stale lock was removed, but another lock appeared before retry."
+                    ) from exc
+            else:
+                raise RuntimeError(
+                    "Another conversion appears to be running. "
+                    f"Lock file: {self.path}. "
+                    f"Existing owner: {existing.get('owner', 'unknown')}; "
+                    f"pid: {existing.get('pid', 'unknown')}. "
+                    "If no conversion is actually running, delete this stale lock file and retry."
+                ) from exc
+        except OSError:
+            raise
+
+        with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+            json.dump(payload, lock_file, ensure_ascii=False, indent=2)
+        _HELD_CONVERSION_LOCKS.add(resolved_path)
+        self.acquired = True
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        if self.reentrant or not self.acquired:
+            return
+        _HELD_CONVERSION_LOCKS.discard(self.path.resolve())
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if payload.get("token") == self.token:
+            self.path.unlink()
+
+    def _read_existing_lock(self) -> dict[str, Any]:
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+
+def write_conversion_status(config: dict[str, Any], rel_key: str, pdf_path: Path) -> None:
+    status_path = conversion_status_path(config)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": "running",
+        "pid": os.getpid(),
+        "source_relpath": rel_key,
+        "source_pdf": to_posix_path_str(pdf_path),
+        "source_filename": pdf_path.name,
+        "started_at": utc_now_iso(),
+        "started_at_epoch": time.time(),
+    }
+    tmp_path = status_path.with_name(status_path.name + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(status_path)
+
+
+def clear_conversion_status(config: dict[str, Any], rel_key: str) -> None:
+    status_path = conversion_status_path(config)
+    if not status_path.exists():
+        return
+    try:
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if payload.get("pid") != os.getpid() or payload.get("source_relpath") != rel_key:
+        return
+    status_path.unlink()
 
 
 def _path_match_key(path: Path | str | None) -> str:
@@ -156,6 +312,84 @@ def existing_markdown_for_pdf(
         output_markdown = str(manifest_entry.get("output_markdown", "")) if manifest_entry else ""
         if output_markdown:
             return Path(output_markdown)
+    return None
+
+
+def _find_manifest_entry_by_sha256(
+    manifest: ManifestStore,
+    sha256: str,
+) -> tuple[str, dict[str, Any]] | None:
+    if not sha256:
+        return None
+    for rel_key, entry in manifest.data.get("files", {}).items():
+        if entry.get("status") != "success":
+            continue
+        if entry.get("sha256") != sha256:
+            continue
+        output_markdown = str(entry.get("output_markdown", "")).strip()
+        if output_markdown and Path(output_markdown).exists():
+            return rel_key, entry
+    return None
+
+
+def existing_markdown_for_pdf_by_sha256(
+    manifest: ManifestStore,
+    fingerprint: dict[str, Any] | None,
+) -> tuple[str, Path] | None:
+    """Fallback match: locate a successful entry whose PDF bytes match *fingerprint*.
+
+    Returns ``(existing_rel_key, markdown_path)`` so callers can auto-heal the
+    frontmatter with an alias for the PDF's current rel_key.
+    """
+    if not fingerprint:
+        return None
+    match = _find_manifest_entry_by_sha256(manifest, fingerprint.get("sha256", ""))
+    if match is None:
+        return None
+    existing_rel_key, entry = match
+    return existing_rel_key, Path(str(entry.get("output_markdown", "")))
+
+
+def existing_markdown_for_duplicate_pdf(
+    pdf_path: Path,
+    input_root: Path,
+    config: dict[str, Any],
+    manifest: ManifestStore,
+) -> tuple[str, Path] | None:
+    """Find a converted canonical bundle for a numbered duplicate PDF.
+
+    Zotero/Drive often produces files such as ``Paper.pdf`` and ``Paper 2.pdf``.
+    When the canonical sibling is already converted, this check avoids another
+    Marker run and lets the caller register the numbered file as an alias.
+    """
+    duplicate_group = main_duplicate_group_pdfs(pdf_path)
+    if len(duplicate_group) < 2:
+        return None
+    if duplicate_group[0].resolve() == pdf_path.resolve():
+        return None
+
+    for candidate_pdf in duplicate_group:
+        if candidate_pdf.resolve() == pdf_path.resolve():
+            continue
+        try:
+            candidate_rel_key = to_posix_path_str(relative_pdf_path(candidate_pdf, input_root))
+        except ValueError:
+            continue
+        candidate_entry = manifest.get(candidate_rel_key)
+        if not candidate_entry or candidate_entry.get("status") != "success":
+            continue
+        if candidate_entry.get("document_role", "main") != "main":
+            continue
+        candidate_markdown = existing_markdown_for_pdf(
+            candidate_pdf, input_root, config, candidate_entry,
+        )
+        if candidate_markdown is not None:
+            return candidate_rel_key, candidate_markdown
+
+        output_markdown = str(candidate_entry.get("output_markdown", "")).strip()
+        if output_markdown and Path(output_markdown).exists():
+            return candidate_rel_key, Path(output_markdown)
+
     return None
 
 
@@ -481,6 +715,8 @@ def archive_pdf_artifacts(
 
 def _get_zotero_map(config: dict[str, Any]) -> ZoteroCollectionMap | None:
     """Return a *ZoteroCollectionMap* if ``zotero_db_path`` is configured."""
+    if config.get("run_mode") == "runner":
+        return None
     db_path = config.get("zotero_db_path")
     if not db_path:
         return None
@@ -978,7 +1214,7 @@ def build_manifest_runtime_metadata(
         "torch_device": config.get("torch_device", "cuda"),
         "force_ocr": bool(config.get("force_ocr", False)),
         "markdown_bundle_dir": str(final_md.parent),
-        "mirror_paths": mirror_paths,
+        "mirror_paths": [],
     }
 
     supporting_info = supporting_source_info(pdf_path)
@@ -1006,9 +1242,12 @@ def remove_primary_bundle_content(bundle_dir: Path, allowed_root: Path) -> None:
         return
 
     if not bundle_dir.is_dir():
-        safe_unlink(bundle_dir, allowed_root)
-        bundle_dir.mkdir(parents=True, exist_ok=True)
-        return
+        raise NotADirectoryError(
+            f"Expected bundle directory but found non-directory at {bundle_dir}. "
+            "This usually indicates leftover mirror artifacts or a stale markdown file "
+            "sitting at the bundle path; move or delete that file, then ensure the PDF's sha256 "
+            "is not already present elsewhere in the index."
+        )
 
     for child in bundle_dir.iterdir():
         if is_supporting_artifact_name(child.name):
@@ -1097,6 +1336,8 @@ def create_collection_mirrors(
     physical_collection = str(physical_relpath.parent).replace("\\", "/")
 
     mirror_mode = config.get("collection_mirror_mode", "symlink")
+    if mirror_mode == "none":
+        return []
     mirror_paths: list[str] = []
 
     for col_path in collections:
@@ -1185,13 +1426,7 @@ def materialize_primary_bundle(
     metadata["document_role"] = "main"
     write_frontmatter_markdown(main_bundle_md, metadata)
 
-    # Create symlink mirrors for additional Zotero collections
-    _logger = logger or __import__("logging").getLogger("paper_to_markdown")
-    mirror_paths = create_collection_mirrors(
-        bundle_dir, pdf_path, input_root, config, zotero_map, _logger,
-    )
-
-    return main_bundle_md, mirror_paths
+    return main_bundle_md, []
 
 
 def materialize_supporting_bundle(
@@ -1326,6 +1561,40 @@ def convert_one_pdf(
             logger.info("Skipping existing Markdown PDF: %s -> %s", rel_key, existing_markdown)
             return existing_markdown
 
+        sha256_match = existing_markdown_for_pdf_by_sha256(manifest, fingerprint)
+        if sha256_match is not None:
+            existing_rel_key, existing_markdown = sha256_match
+            if manifest.register_alias_for_rel_key(
+                existing_rel_key, rel_key, pdf, fingerprint,
+            ):
+                logger.info(
+                    "Skipping existing Markdown PDF via sha256 match: %s -> %s (aliased as %s)",
+                    existing_rel_key, existing_markdown, rel_key,
+                )
+            else:
+                logger.info(
+                    "Skipping existing Markdown PDF via sha256 match: %s -> %s",
+                    existing_rel_key, existing_markdown,
+                )
+            return existing_markdown
+
+        duplicate_match = existing_markdown_for_duplicate_pdf(pdf, input_root, config, manifest)
+        if duplicate_match is not None:
+            existing_rel_key, existing_markdown = duplicate_match
+            if manifest.register_alias_for_rel_key(
+                existing_rel_key, rel_key, pdf, fingerprint,
+            ):
+                logger.info(
+                    "Skipping numbered duplicate PDF: %s -> %s (aliased as %s)",
+                    existing_rel_key, existing_markdown, rel_key,
+                )
+            else:
+                logger.info(
+                    "Skipping numbered duplicate PDF: %s -> %s",
+                    existing_rel_key, existing_markdown,
+                )
+            return existing_markdown
+
     if not force_reconvert and manifest.is_unchanged(rel_key, fingerprint):
         logger.info(
             "Reprocessing unchanged PDF because markdown layout is missing or outdated: %s",
@@ -1336,11 +1605,13 @@ def convert_one_pdf(
 
     raw_output_dir = raw_dir_for_pdf(pdf, input_root, config)
 
+    write_conversion_status(config, rel_key, pdf)
     try:
         run_marker(config, pdf, raw_output_dir, logger)
-        final_md, mirror_paths = materialize_final_bundle(
+        final_md, _mirror_paths = materialize_final_bundle(
             config, pdf, input_root, raw_output_dir, logger=logger,
         )
+        mirror_paths: list[str] = []
         canonical_source_pdf = pdf
         if SUPPORTING_MARKDOWN_FILE_RE.fullmatch(final_md.name):
             if existing_entry and existing_entry.get("mirror_paths"):
@@ -1361,9 +1632,6 @@ def convert_one_pdf(
                 manifest=manifest,
                 logger=logger,
             )
-            if canonical_source_pdf != pdf and mirror_paths:
-                remove_collection_mirrors(mirror_paths, config, logger)
-                mirror_paths = []
         manifest.mark_success(
             rel_key=rel_key,
             fingerprint=fingerprint,
@@ -1381,9 +1649,11 @@ def convert_one_pdf(
         logger.exception("Conversion failed: %s", rel_key)
         manifest.mark_failure(rel_key, pdf, str(exc))
         raise
+    finally:
+        clear_conversion_status(config, rel_key)
 
 
-def convert_one_pdf_with_retries(
+def _convert_one_pdf_with_retries_unlocked(
     pdf_path: str | Path,
     config_path: str | None = None,
     force_reconvert: bool = False,
@@ -1416,10 +1686,95 @@ def convert_one_pdf_with_retries(
     raise last_exc  # type: ignore[misc]
 
 
-def convert_all_pdfs(
+def convert_one_pdf_with_retries(
+    pdf_path: str | Path,
+    config_path: str | None = None,
+    force_reconvert: bool = False,
+    max_retries: int = MAX_CONVERSION_RETRIES,
+) -> Path | None:
+    config = load_config(config_path)
+    with ConversionLock(config, owner=f"single:{Path(pdf_path).name}"):
+        return _convert_one_pdf_with_retries_unlocked(
+            pdf_path,
+            config_path=config_path,
+            force_reconvert=force_reconvert,
+            max_retries=max_retries,
+        )
+
+
+def _reconcile_only_report(
+    pdfs: list[Path],
+    config: dict[str, Any],
+    input_root: Path,
+    logger,
+) -> dict[str, int]:
+    manifest = ManifestStore(config)
+    matched = 0
+    missing: list[tuple[str, Path]] = []
+    sha256_heal: list[tuple[str, str]] = []
+    duplicate_aliases: list[tuple[str, str]] = []
+
+    for pdf in pdfs:
+        rel_key = str(relative_pdf_path(pdf, input_root)).replace("\\", "/")
+        existing_entry = manifest.get(rel_key)
+        if existing_markdown_for_pdf(pdf, input_root, config, existing_entry) is not None:
+            matched += 1
+            continue
+
+        fingerprint = pdf_fingerprint(pdf, use_sha256=config.get("compute_sha256", True))
+        sha256_match = existing_markdown_for_pdf_by_sha256(manifest, fingerprint)
+        if sha256_match is not None:
+            existing_rel_key, _existing_md = sha256_match
+            sha256_heal.append((existing_rel_key, rel_key))
+            matched += 1
+            continue
+
+        duplicate_match = existing_markdown_for_duplicate_pdf(pdf, input_root, config, manifest)
+        if duplicate_match is not None:
+            existing_rel_key, _existing_md = duplicate_match
+            duplicate_aliases.append((existing_rel_key, rel_key))
+            matched += 1
+            continue
+
+        missing.append((rel_key, pdf))
+
+    logger.info(
+        "Reconcile summary: matched=%s missing=%s sha256_rematch=%s numbered_duplicate=%s",
+        matched,
+        len(missing),
+        len(sha256_heal),
+        len(duplicate_aliases),
+    )
+    if sha256_heal:
+        logger.info("%s PDF(s) match existing markdown by sha256 under a different rel_key "
+                    "(alias would be written on next non-reconcile run):", len(sha256_heal))
+        for old_rel, new_rel in sha256_heal:
+            logger.info("  %s -> %s", old_rel, new_rel)
+    if duplicate_aliases:
+        logger.info("%s numbered duplicate PDF(s) can reuse existing markdown:",
+                    len(duplicate_aliases))
+        for old_rel, new_rel in duplicate_aliases:
+            logger.info("  %s -> %s", old_rel, new_rel)
+    if missing:
+        logger.info("%s PDF(s) missing a markdown:", len(missing))
+        for rel_key, _pdf in missing:
+            logger.info("  %s", rel_key)
+    return {
+        "matched": matched,
+        "missing": len(missing),
+        "sha256_rematch": len(sha256_heal),
+        "numbered_duplicate": len(duplicate_aliases),
+        "converted": 0,
+        "skipped": matched,
+        "failed": 0,
+    }
+
+
+def _convert_all_pdfs_unlocked(
     config_path: str | None = None,
     force_reconvert: bool = False,
     limit: int | None = None,
+    reconcile_only: bool = False,
 ) -> dict[str, int]:
     config = load_config(config_path)
     ensure_directories(config)
@@ -1434,6 +1789,9 @@ def convert_all_pdfs(
         pdfs = pdfs[:limit]
 
     logger.info("PDFs discovered: %s", len(pdfs))
+
+    if reconcile_only:
+        return _reconcile_only_report(pdfs, config, input_root, logger)
 
     converted = 0
     skipped = 0
@@ -1525,3 +1883,27 @@ def convert_all_pdfs(
         failed,
     )
     return summary
+
+
+def convert_all_pdfs(
+    config_path: str | None = None,
+    force_reconvert: bool = False,
+    limit: int | None = None,
+    reconcile_only: bool = False,
+) -> dict[str, int]:
+    if reconcile_only:
+        return _convert_all_pdfs_unlocked(
+            config_path=config_path,
+            force_reconvert=force_reconvert,
+            limit=limit,
+            reconcile_only=reconcile_only,
+        )
+
+    config = load_config(config_path)
+    with ConversionLock(config, owner="batch"):
+        return _convert_all_pdfs_unlocked(
+            config_path=config_path,
+            force_reconvert=force_reconvert,
+            limit=limit,
+            reconcile_only=reconcile_only,
+        )

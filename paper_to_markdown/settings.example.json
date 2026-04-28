@@ -25,12 +25,8 @@
     "run_mode": "运行模式：all-in-one（单机全功能，默认）/ runner（Win 端，只转换，不建镜像）/ controller（Mac 端，只巡检清理，不需要 marker）。Run mode: all-in-one (default) / runner (conversion only, no collection mirror) / controller (verification and cleanup only, marker not required).",
     "orphan_grace_hours": "controller 模式：PDF 消失后等待多少小时再归档对应 Markdown，默认 24。Controller mode: how many hours to wait before archiving a Markdown whose PDF has disappeared, default 24.",
     "archive_before_delete": "controller 模式：删除孤儿 Markdown 前是否先归档到 archive/，默认 true。Controller mode: whether to move orphan bundles to archive/ before deletion, default true.",
-    "watch_initial_scan": "runner 端实时监控启动时是否先扫描并转换已有 PDF。Whether the runner watcher should scan existing PDFs at startup.",
-    "watch_stable_checks": "runner 端转换前连续看到文件大小和 mtime 不变的次数。Number of stable file checks before converting a watched PDF.",
-    "watch_stable_interval_seconds": "runner 端文件稳定性检查间隔秒数。Seconds between stable file checks.",
-    "watch_poll_interval_seconds": "runner 端处理事件队列的轮询间隔秒数。Seconds between processing pending watcher events.",
-    "zotero_db_path": "可选；Zotero 数据库 zotero.sqlite 的路径，配置后启用 collection 层级同步。Optional; path to Zotero's zotero.sqlite database, which enables collection hierarchy syncing.",
-    "collection_mirror_mode": "可选；镜像模式为 symlink 或 copy。Optional; mirror mode can be symlink or copy.",
+    "zotero_db_path": "controller/all-in-one 可选；Zotero 数据库 zotero.sqlite 的路径。runner 模式会忽略此字段。Optional for controller/all-in-one; path to Zotero's zotero.sqlite database. Ignored in runner mode.",
+    "zotero_markdown_root": "controller/all-in-one 可选；Zotero Markdown 视图输出目录，默认 output_root/zotero_markdown。Optional for controller/all-in-one; output directory for Zotero Markdown views, default output_root/zotero_markdown.",
     "zotero_sync_interval_seconds": "可选；sync daemon 轮询 Zotero 数据库的间隔秒数，默认 60。Optional; polling interval in seconds for the Zotero sync daemon, default 60."
   },
   "run_mode": "all-in-one",
@@ -53,11 +49,7 @@
   "compute_sha256": true,
   "log_level": "INFO",
   "daemon_idle_timeout_seconds": 300,
-  "watch_initial_scan": true,
-  "watch_stable_checks": 3,
-  "watch_stable_interval_seconds": 2,
-  "watch_poll_interval_seconds": 1,
   "zotero_db_path": "",
-  "collection_mirror_mode": "symlink",
+  "zotero_markdown_root": "",
   "zotero_sync_interval_seconds": 60
 }

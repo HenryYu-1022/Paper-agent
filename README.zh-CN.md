@@ -99,7 +99,7 @@ English version: [README.md](README.md)
 **Windows runner / 单机 — 实时监控 PDF 并本地转换：**
 
 ```bash
-python3 -m paper_to_markdown.watch_runner
+python3 monitor.py --background --watch --interval 60 --convert --apply
 ```
 
 需要只跑一次全量扫描时，仍可使用 `cd paper_to_markdown && python3 convert.py`。
@@ -234,7 +234,7 @@ zotero_collections:    # 仅配置 zotero_db_path 后出现
 | 你想做什么 | 命令 |
 |---|---|
 | 一次性转换所有 PDF | `cd paper_to_markdown && python3 convert.py` |
-| 实时监控 PDF 并转换（runner 端） | `python3 -m paper_to_markdown.watch_runner` |
+| 实时监控 PDF 并转换（runner 端，Windows 隐式后台） | `python3 monitor.py --background --watch --interval 60 --convert --apply` |
 | 只转一个 PDF | `python3 convert.py --path "/path/to/Paper.pdf"` |
 | 强制全部重转 | `python3 convert.py --force` |
 | 只测前 N 个 | `python3 convert.py --limit 5` |
@@ -243,7 +243,8 @@ zotero_collections:    # 仅配置 zotero_db_path 后出现
 | 构建 Zotero 插件 | `cd zotero-paper-agent && ./scripts/build.sh` |
 | 同步 Zotero collection（单次） | `cd paper_to_markdown && python3 sync_collections.py --once` |
 | 同步 Zotero collection（守护） | `cd paper_to_markdown && python3 sync_collections.py` |
-| 查看转换进度 | `python3 monitor.py` |
+| 监控并转换需要处理的 PDF | `python3 monitor.py` |
+| 只查看转换进度 | `python3 monitor.py --no-convert` |
 | 巡检孤儿 Markdown（只看不删） | `python3 -m paper_to_markdown.verify` |
 | 立即删除孤儿 Markdown | `python3 -m paper_to_markdown.verify --apply` |
 | 持续巡检并自动删除（controller 端） | `python3 -m paper_to_markdown.verify --apply --watch` |
@@ -284,9 +285,6 @@ python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json
 | `collection_mirror_mode` | | `symlink` | `symlink` 或 `copy` |
 | `zotero_sync_interval_seconds` | | `60` | collection 同步轮询间隔 |
 | `daemon_idle_timeout_seconds` | | `300` | daemon 空闲多少秒后退出；`0` 表示不自动退出 |
-| `watch_initial_scan` | | `true` | runner watcher 启动时是否先扫描已有 PDF |
-| `watch_stable_checks` | | `3` | 转换前确认文件稳定的次数 |
-| `watch_stable_interval_seconds` | | `2` | 每次稳定性检查间隔秒数 |
 | `python_path` | | — | Python 绝对路径（后台自启动用） |
 | `log_level` | | `INFO` | 日志级别 |
 

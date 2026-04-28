@@ -86,12 +86,20 @@ def load_config(config_path: str | None = None) -> dict[str, Any]:
         else:
             config.pop("marker_repo_root", None)
 
-    # Optional: Zotero database path for collection hierarchy mirroring
-    zotero_db_path = str(config.get("zotero_db_path", "")).strip()
-    if zotero_db_path:
-        config["zotero_db_path"] = _resolve_path_value(zotero_db_path)
-    else:
+    # Runner machines only convert PDFs.  Collection metadata and view
+    # materialization belong on the controller side, where Zotero is available.
+    if run_mode == "runner":
         config.pop("zotero_db_path", None)
+        config.pop("collection_mirror_mode", None)
+        config.pop("collection_views_root", None)
+        config.pop("zotero_markdown_root", None)
+        config.pop("zotero_sync_interval_seconds", None)
+    else:
+        zotero_db_path = str(config.get("zotero_db_path", "")).strip()
+        if zotero_db_path:
+            config["zotero_db_path"] = _resolve_path_value(zotero_db_path)
+        else:
+            config.pop("zotero_db_path", None)
 
     # SHA256 fingerprinting defaults on so frontmatter remains stable across
     # devices when the user has not explicitly set it.
@@ -134,6 +142,14 @@ def manifest_path(config: dict[str, Any]) -> Path:
 
 def collection_state_path(config: dict[str, Any]) -> Path:
     return state_root(config) / "collection_state.json"
+
+
+def conversion_status_path(config: dict[str, Any]) -> Path:
+    return state_root(config) / "conversion_status.json"
+
+
+def conversion_lock_path(config: dict[str, Any]) -> Path:
+    return state_root(config) / "conversion.lock"
 
 
 def to_posix_path_str(path: Path | str) -> str:
@@ -183,7 +199,12 @@ def ensure_directories(config: dict[str, Any]) -> None:
         path.mkdir(parents=True, exist_ok=True)
 
 
-def setup_logger(config: dict[str, Any], logger_name: str = "paper_to_markdown") -> logging.Logger:
+def setup_logger(
+    config: dict[str, Any],
+    logger_name: str = "paper_to_markdown",
+    *,
+    console: bool | None = None,
+) -> logging.Logger:
     ensure_directories(config)
 
     logger = logging.getLogger(logger_name)
@@ -201,11 +222,13 @@ def setup_logger(config: dict[str, Any], logger_name: str = "paper_to_markdown")
     file_handler = logging.FileHandler(logs_root(config) / "app.log", encoding="utf-8")
     file_handler.setFormatter(formatter)
 
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-
     logger.addHandler(file_handler)
-    logger.addHandler(stream_handler)
+    if console is None:
+        console = os.environ.get("PAPER_TO_MARKDOWN_LOG_CONSOLE", "1") != "0"
+    if console:
+        stream_handler = logging.StreamHandler()
+        stream_handler.setFormatter(formatter)
+        logger.addHandler(stream_handler)
     return logger
 
 

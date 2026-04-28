@@ -1,4 +1,4 @@
-"""Controller-mode verification script.
+﻿"""Controller-mode verification script.
 
 Scans the Markdown library for bundles whose source PDF no longer exists in
 input_root and immediately removes them (or reports them in dry-run mode).

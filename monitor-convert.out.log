@@ -1,0 +1,18 @@
+Input PDF index: 338
+Markdown index entries: 336
+Markdown success entries: 336
+Markdown failed entries: 0
+Input PDFs matched to Markdown: 336
+Input PDFs with failed Markdown status: 0
+Input PDFs needing conversion: 2
+Input PDFs pending conversion: 2
+Estimated time remaining: waiting for progress sample
+Current PDF: none
+Current PDF index state: none
+Current PDF elapsed: 0s
+Markdown success entries without current input PDF: 0
+
+First 2 PDFs needing conversion:
+- 我的文库/硕士论文/引用文献/通用/Jantarang 等 - 2018 - Role of support in photothermal carbon dioxide hydrogenation catalysed by niCexTiyO2.pdf
+- 我的文库/硕士论文/高熵CO2还原工作/Zhang 等 - 2024 - Designing water resistant high entropy oxide materials.pdf
+Converted this cycle: 2 (errors 0, skipped_running=False)

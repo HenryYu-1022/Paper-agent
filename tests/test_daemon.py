@@ -1,3 +1,4 @@
+import logging
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,10 +16,18 @@ def make_config(tmp_path: Path) -> dict:
     }
 
 
+def make_context(config: dict) -> DaemonContext:
+    logger = logging.getLogger(f"paper_to_markdown.daemon.test.{id(config)}")
+    logger.handlers.clear()
+    logger.addHandler(logging.NullHandler())
+    logger.propagate = False
+    return DaemonContext(config=config, config_path=None, logger=logger)
+
+
 class DaemonTests(unittest.TestCase):
     def test_ping_returns_json_serializable_response(self):
         with tempfile.TemporaryDirectory() as tmp:
-            context = DaemonContext(config=make_config(Path(tmp)), config_path=None)
+            context = make_context(make_config(Path(tmp)))
 
             response = handle_request({"id": "req-1", "command": "ping"}, context)
 
@@ -50,7 +59,7 @@ Body
 """,
                 encoding="utf-8",
             )
-            context = DaemonContext(config=config, config_path=None)
+            context = make_context(config)
 
             response = handle_request(
                 {"id": "req-2", "command": "delete_orphan", "source_relpath": "AI/Paper.pdf"},
@@ -66,4 +75,3 @@ Body
 
 if __name__ == "__main__":
     unittest.main()
-

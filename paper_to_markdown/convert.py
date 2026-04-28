@@ -45,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Remove markdown artifacts for PDFs that no longer exist in input_root.",
     )
+    parser.add_argument(
+        "--reconcile-only",
+        action="store_true",
+        help="Report parity between PDFs and existing markdown (including sha256 rematches) "
+             "without running the conversion pipeline.",
+    )
     return parser
 
 
@@ -100,6 +106,7 @@ def main() -> None:
             config_path=args.config,
             force_reconvert=args.force,
             limit=args.limit,
+            reconcile_only=args.reconcile_only,
         )
         print(summary)
     finally:

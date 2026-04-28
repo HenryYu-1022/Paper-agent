@@ -5,21 +5,20 @@
 中文说明见 [README.zh-CN.md](README.zh-CN.md)。
 
 ```text
- ┌──────────────┐
- │ zotero.sqlite│── collection hierarchy ──┐
- └──────────────┘                          ▼
-                                    ┌──────────────┐     ┌──────────────┐
- ┌──────────────┐   PDF files      │ Markdown +   │     │ AI agents    │
- │ PDF folder   │─────────────────▶│ frontmatter  │────▶│ search &     │
- │ (Google Drive│   Marker engine  │ + symlink    │     │ summarize    │
- │  or local)   │                  │   mirrors    │     └──────────────┘
- └──────────────┘                  └──────────────┘
+ ┌──────────────┐   PDF files      ┌──────────────┐     ┌──────────────┐
+ │ PDF folder   │─────────────────▶│ Markdown +   │────▶│ AI agents    │
+ │ (Google Drive│   Marker engine  │ frontmatter  │     │ search &     │
+ │  or local)   │                  └──────────────┘     │ summarize    │
+ └──────────────┘                         │             └──────────────┘
+                                          ▼
+                               controller builds
+                               zotero_markdown/
 ```
 
 **Key features:**
 - Batch PDF→Markdown conversion via [Marker](https://github.com/datalab-to/marker)
-- Reads Zotero collection hierarchy from `zotero.sqlite` (read-only)
-- Creates symlink mirrors so Markdown library matches Zotero folder structure
+- Runner mode converts only and never needs Zotero SQLite
+- Controller/all-in-one mode can build `zotero_markdown/` collection views from `zotero.sqlite`
 - Writes `zotero_collections` tags into YAML frontmatter
 - Zotero plugin can rename PDFs, launch the local daemon, convert changed attachments, and open Markdown files
 - Conversion status is read from Markdown frontmatter, so the library works across synced devices without `manifest.json`
@@ -98,7 +97,7 @@ Set `marker_cli` to the command name (`marker_single`) or its absolute path.
 **Windows runner / single machine — watch PDFs and convert locally:**
 
 ```bash
-python3 -m paper_to_markdown.watch_runner
+python3 monitor.py --background --watch --interval 60 --convert --apply
 ```
 
 For a one-shot full scan, you can still use `cd paper_to_markdown && python3 convert.py`.
@@ -142,8 +141,7 @@ Edit `paper_to_markdown/settings.json` — the key fields:
   "output_root":   "/path/to/output/folder",         // where Markdown goes
   "marker_cli":    "marker_single",                  // or absolute path
   "hf_home":       "/path/to/.cache/huggingface",
-  "torch_device":  "cuda",                           // cuda / mps / cpu
-  "zotero_db_path": "/path/to/Zotero/zotero.sqlite"  // optional, enables collection mirroring
+  "torch_device":  "cuda"                            // cuda / mps / cpu
 }
 ```
 
@@ -176,18 +174,12 @@ In the plugin preferences, set:
 
 The plugin listens for Zotero attachment add/modify/trash/delete events and talks to the Python daemon over stdin/stdout JSON lines.
 
-### Step 4 — (Optional) Sync Zotero collections
+### Step 4 — (Optional) Build Zotero Markdown views
 
-If you still want to mirror collection changes from `zotero.sqlite` outside the plugin event flow:
+Run this on the controller/all-in-one host where Zotero is available:
 
 ```bash
-cd paper_to_markdown
-
-# One-shot sync
-python3 sync_collections.py --once
-
-# Or run as a daemon (polls every 60s)
-python3 sync_collections.py
+python3 -m paper_to_markdown.zotero_markdown --mode symlink --clean
 ```
 
 ### Step 5 — Use with AI
@@ -203,8 +195,9 @@ output_root/
   markdown/           ← your Markdown library (open this in AI / Obsidian)
     Paper1/
       Paper1.md       ← converted paper with YAML frontmatter
+  zotero_markdown/    ← optional controller-built Zotero collection view
     Collection1/
-      Paper2/         ← symlink mirror from Zotero collection
+      Paper2/         ← symlink/copy pointing at a converted bundle
   logs/
     app.log
     failed_pdfs.txt
@@ -233,16 +226,18 @@ zotero_collections:    # only when zotero_db_path is configured
 | What you want to do | Command |
 |---|---|
 | Convert all PDFs once | `cd paper_to_markdown && python3 convert.py` |
-| Watch PDFs and convert in realtime (runner) | `python3 -m paper_to_markdown.watch_runner` |
+| Watch PDFs and convert in realtime (runner, hidden on Windows) | `python3 monitor.py --background --watch --interval 60 --convert --apply` |
 | Convert a single PDF | `python3 convert.py --path "/path/to/Paper.pdf"` |
 | Force reconvert everything | `python3 convert.py --force` |
 | Test with first N files | `python3 convert.py --limit 5` |
 | Clean up orphaned Markdown | `python3 convert.py --cleanup` |
+| Postprocess duplicate/SI suffix PDFs (dry-run) | `python3 -m paper_to_markdown.postprocess_markdown` |
+| Apply duplicate/SI postprocess cleanup | `python3 -m paper_to_markdown.postprocess_markdown --apply` |
 | Run JSON-line daemon | `python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json` |
 | Build Zotero plugin | `cd zotero-paper-agent && ./scripts/build.sh` |
-| Sync Zotero collections (once) | `cd paper_to_markdown && python3 sync_collections.py --once` |
-| Sync Zotero collections (daemon) | `cd paper_to_markdown && python3 sync_collections.py` |
-| Check conversion progress | `python3 monitor.py` |
+| Build Zotero Markdown views | `python3 -m paper_to_markdown.zotero_markdown --mode symlink --clean` |
+| Monitor and convert PDFs needing work | `python3 monitor.py` |
+| Check conversion progress only | `python3 monitor.py --no-convert` |
 | Scan for orphaned Markdown (dry-run) | `python3 -m paper_to_markdown.verify` |
 | Delete orphaned Markdown immediately | `python3 -m paper_to_markdown.verify --apply` |
 | Watch and auto-delete orphans (controller) | `python3 -m paper_to_markdown.verify --apply --watch` |
@@ -279,13 +274,10 @@ Config file: `paper_to_markdown/settings.json`
 | `hf_home` | ✅ | — | Hugging Face cache directory |
 | `torch_device` | | `cuda` | `cuda` / `mps` / `cpu` |
 | `force_ocr` | | `false` | Force OCR for scanned PDFs |
-| `zotero_db_path` | | — | Path to `zotero.sqlite`; enables collection mirroring |
-| `collection_mirror_mode` | | `symlink` | `symlink` or `copy` |
-| `zotero_sync_interval_seconds` | | `60` | Collection sync polling interval |
+| `zotero_db_path` | | — | Controller/all-in-one only; path to `zotero.sqlite` for Zotero Markdown views |
+| `zotero_markdown_root` | | `output_root/zotero_markdown` | Controller/all-in-one only; output root for Zotero collection Markdown views |
+| `zotero_sync_interval_seconds` | | `60` | Controller collection sync polling interval |
 | `daemon_idle_timeout_seconds` | | `300` | Exit the plugin daemon after this many idle seconds; `0` disables |
-| `watch_initial_scan` | | `true` | Whether the runner watcher scans existing PDFs on startup |
-| `watch_stable_checks` | | `3` | Number of stable file checks before conversion |
-| `watch_stable_interval_seconds` | | `2` | Seconds between stable file checks |
 | `python_path` | | — | Absolute Python path for background startup |
 | `log_level` | | `INFO` | Logging level |
 
@@ -298,7 +290,8 @@ Config file: `paper_to_markdown/settings.json`
 | `paper_to_markdown/convert.py` | Manual batch conversion CLI (runner / all-in-one) |
 | `paper_to_markdown/verify.py` | Controller-mode orphan scanner: deletes Markdown when its PDF is gone |
 | `paper_to_markdown/daemon.py` | JSON-line daemon used by the Zotero plugin |
-| `paper_to_markdown/sync_collections.py` | Zotero collection sync daemon |
+| `paper_to_markdown/postprocess_markdown.py` | After-conversion duplicate main cleanup and SI merge tool |
+| `paper_to_markdown/zotero_markdown.py` | Controller/all-in-one Zotero Markdown view builder |
 | `paper_to_markdown/settings.json` | Your local config (create from `.example.json`) |
 | `paper_to_markdown/pipeline.py` | Core conversion engine (imported, not run directly) |
 | `paper_to_markdown/frontmatter_index.py` | In-memory conversion index built from Markdown frontmatter |

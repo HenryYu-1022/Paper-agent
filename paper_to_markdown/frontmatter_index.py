@@ -4,13 +4,22 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .common import (
-    build_frontmatter,
-    markdown_root,
-    parse_frontmatter,
-    to_posix_path_str,
-    utc_now_iso,
-)
+try:
+    from .common import (
+        build_frontmatter,
+        markdown_root,
+        parse_frontmatter,
+        to_posix_path_str,
+        utc_now_iso,
+    )
+except ImportError:
+    from common import (
+        build_frontmatter,
+        markdown_root,
+        parse_frontmatter,
+        to_posix_path_str,
+        utc_now_iso,
+    )
 
 
 SOURCE_ALIAS_FIELD = "source_aliases"
@@ -92,6 +101,25 @@ def _markdown_relpath(md_path: Path, md_root: Path) -> str:
         return to_posix_path_str(md_path)
 
 
+def _expected_main_markdown_relpath(rel_key: str) -> str:
+    rel_path = Path(rel_key)
+    return to_posix_path_str(rel_path.with_suffix("") / f"{rel_path.stem}.md")
+
+
+def _entry_priority(entry: dict[str, Any]) -> tuple[int, int, int, int, int]:
+    markdown_relpath = _normalize_rel_key(entry.get("markdown_relpath"))
+    expected_relpath = _expected_main_markdown_relpath(str(entry.get("source_relpath", "")))
+    declared_relpath = _normalize_rel_key(entry.get("_declared_markdown_relpath"))
+
+    return (
+        1 if not entry.get("_source_is_alias") else 0,
+        1 if entry.get("_has_explicit_status") else 0,
+        1 if markdown_relpath == expected_relpath else 0,
+        1 if declared_relpath and declared_relpath == markdown_relpath else 0,
+        -len(markdown_relpath),
+    )
+
+
 class FrontmatterIndex:
     """Manifest-compatible state adapter backed by Markdown frontmatter.
 
@@ -120,13 +148,16 @@ class FrontmatterIndex:
                 if not metadata:
                     continue
                 for rel_key, source_metadata, is_alias in _source_records(metadata):
-                    files[rel_key] = self._build_entry(
+                    entry = self._build_entry(
                         rel_key=rel_key,
                         md_path=md_path,
                         metadata=metadata,
                         source_metadata=source_metadata,
                         is_alias=is_alias,
                     )
+                    existing = files.get(rel_key)
+                    if existing is None or _entry_priority(entry) > _entry_priority(existing):
+                        files[rel_key] = entry
         self.data = {"version": 2, "files": files}
 
     def _build_entry(
@@ -158,6 +189,8 @@ class FrontmatterIndex:
             "document_role": metadata.get("document_role", "main"),
             "_frontmatter_path": str(md_path),
             "_source_is_alias": is_alias,
+            "_has_explicit_status": "conversion_status" in metadata or "status" in metadata,
+            "_declared_markdown_relpath": metadata.get("markdown_relpath", ""),
         }
         entry.update(fingerprint)
         for key in [
@@ -241,6 +274,57 @@ class FrontmatterIndex:
 
         output_markdown.write_text(build_frontmatter(frontmatter) + body, encoding="utf-8")
         self.reload()
+
+    def register_alias_for_rel_key(
+        self,
+        existing_rel_key: str,
+        new_rel_key: str,
+        source_pdf: Path,
+        fingerprint: dict[str, Any] | None = None,
+    ) -> bool:
+        """Record *new_rel_key* as a source alias on the markdown matched by *existing_rel_key*.
+
+        Used when a PDF is recognized as an already-converted paper via a
+        fallback match (e.g., sha256) even though its current relative path
+        differs from the frontmatter's primary ``source_relpath``.  Writes the
+        alias back to the markdown so subsequent runs hit the primary path.
+        Returns True iff an alias was added or updated.
+        """
+        existing_rel_key = _normalize_rel_key(existing_rel_key)
+        new_rel_key = _normalize_rel_key(new_rel_key)
+        if not existing_rel_key or not new_rel_key or existing_rel_key == new_rel_key:
+            return False
+
+        entry = self.get(existing_rel_key)
+        if not entry:
+            return False
+
+        md_path = Path(str(entry.get("output_markdown", "")))
+        if not md_path.exists():
+            return False
+
+        frontmatter, body = parse_frontmatter(md_path)
+        frontmatter = dict(frontmatter)
+
+        alias_update: dict[str, Any] = {
+            "source_pdf": to_posix_path_str(source_pdf),
+            "source_relpath": new_rel_key,
+            "source_filename": source_pdf.name,
+            "aliased_at": utc_now_iso(),
+        }
+        if fingerprint:
+            alias_update.update(_fingerprint_updates(fingerprint))
+        alias_update = {
+            key: _clean_metadata_value(value)
+            for key, value in alias_update.items()
+            if value is not None and key not in INTERNAL_ENTRY_KEYS
+        }
+
+        aliases = self._upsert_alias(frontmatter.get(SOURCE_ALIAS_FIELD, []), alias_update)
+        frontmatter[SOURCE_ALIAS_FIELD] = aliases
+        md_path.write_text(build_frontmatter(frontmatter) + body, encoding="utf-8")
+        self.reload()
+        return True
 
     def mark_failure(self, rel_key: str, source_pdf: Path, error: str) -> None:
         rel_key = _normalize_rel_key(rel_key)
