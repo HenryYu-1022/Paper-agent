@@ -20,8 +20,8 @@
 - Runner mode converts only and never needs Zotero SQLite
 - Controller/all-in-one mode can build `zotero_markdown/` collection views from `zotero.sqlite`
 - Writes `zotero_collections` tags into YAML frontmatter
-- Zotero plugin can rename PDFs, launch the local daemon, convert changed attachments, and open Markdown files
 - Conversion status is read from Markdown frontmatter, so the library works across synced devices without `manifest.json`
+- Loose marker images are auto-organized into per-bundle `figures/` subfolders
 - Works with [zotero-attanger](https://github.com/HenryYu-1022/zotero-attanger) for multi-device PDF access via Google Drive
 
 ---
@@ -154,27 +154,7 @@ cd paper_to_markdown
 python3 convert.py
 ```
 
-### Step 3 — (Optional) Use the Zotero plugin
-
-Build and install the local Zotero plugin:
-
-```bash
-cd zotero-paper-agent
-./scripts/build.sh
-```
-
-Install `zotero-paper-agent.xpi` in Zotero via Tools → Plugins/Add-ons → Install Add-on From File.
-In the plugin preferences, set:
-
-- `daemon.py`: this repo's `paper_to_markdown/daemon.py`
-- `Python`: the Python executable with this project's requirements installed
-- `PDF root`: same value as `input_root`
-- `Output root`: same value as `output_root`
-- `Marker`, `HF cache`, `Device`, and `Idle timeout`
-
-The plugin listens for Zotero attachment add/modify/trash/delete events and talks to the Python daemon over stdin/stdout JSON lines.
-
-### Step 4 — (Optional) Build Zotero Markdown views
+### Step 3 — (Optional) Build Zotero Markdown views
 
 Run this on the controller/all-in-one host where Zotero is available:
 
@@ -182,7 +162,7 @@ Run this on the controller/all-in-one host where Zotero is available:
 python3 -m paper_to_markdown.zotero_markdown --mode symlink --clean
 ```
 
-### Step 5 — Use with AI
+### Step 4 — Use with AI
 
 Open the `output_root/markdown/` folder as a workspace in Codex, Claude Code, or any AI agent. Ask questions across your entire library.
 
@@ -201,7 +181,7 @@ output_root/
   logs/
     app.log
     failed_pdfs.txt
-  archive/            ← optional orphan archives from the plugin/daemon
+  archive/            ← optional orphan archives from monitor.py / verify.py
 ```
 
 Each `.md` file includes YAML frontmatter. This frontmatter is the conversion state:
@@ -233,32 +213,14 @@ zotero_collections:    # only when zotero_db_path is configured
 | Clean up orphaned Markdown | `python3 convert.py --cleanup` |
 | Postprocess duplicate/SI suffix PDFs (dry-run) | `python3 -m paper_to_markdown.postprocess_markdown` |
 | Apply duplicate/SI postprocess cleanup | `python3 -m paper_to_markdown.postprocess_markdown --apply` |
-| Run JSON-line daemon | `python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json` |
-| Build Zotero plugin | `cd zotero-paper-agent && ./scripts/build.sh` |
+| Organize loose images into per-bundle `figures/` (dry-run) | `python3 -m paper_to_markdown.organize_figures` |
+| Apply figure organization | `python3 -m paper_to_markdown.organize_figures --apply` |
 | Build Zotero Markdown views | `python3 -m paper_to_markdown.zotero_markdown --mode symlink --clean` |
 | Monitor and convert PDFs needing work | `python3 monitor.py` |
 | Check conversion progress only | `python3 monitor.py --no-convert` |
 | Scan for orphaned Markdown (dry-run) | `python3 -m paper_to_markdown.verify` |
 | Delete orphaned Markdown immediately | `python3 -m paper_to_markdown.verify --apply` |
 | Watch and auto-delete orphans (controller) | `python3 -m paper_to_markdown.verify --apply --watch` |
-
----
-
-## JSON-Line Daemon
-
-The Zotero plugin manages the daemon automatically. For manual testing:
-
-```bash
-python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json
-```
-
-Example request:
-
-```json
-{"id":"1","command":"convert","path":"/path/to/Paper.pdf"}
-```
-
-Supported commands include `ping`, `convert`, `archive_orphan`, `delete_orphan`, `cleanup_orphans`, `rescan`, and `shutdown`.
 
 ---
 
@@ -277,7 +239,6 @@ Config file: `paper_to_markdown/settings.json`
 | `zotero_db_path` | | — | Controller/all-in-one only; path to `zotero.sqlite` for Zotero Markdown views |
 | `zotero_markdown_root` | | `output_root/zotero_markdown` | Controller/all-in-one only; output root for Zotero collection Markdown views |
 | `zotero_sync_interval_seconds` | | `60` | Controller collection sync polling interval |
-| `daemon_idle_timeout_seconds` | | `300` | Exit the plugin daemon after this many idle seconds; `0` disables |
 | `python_path` | | — | Absolute Python path for background startup |
 | `log_level` | | `INFO` | Logging level |
 
@@ -289,15 +250,14 @@ Config file: `paper_to_markdown/settings.json`
 |---|---|
 | `paper_to_markdown/convert.py` | Manual batch conversion CLI (runner / all-in-one) |
 | `paper_to_markdown/verify.py` | Controller-mode orphan scanner: deletes Markdown when its PDF is gone |
-| `paper_to_markdown/daemon.py` | JSON-line daemon used by the Zotero plugin |
 | `paper_to_markdown/postprocess_markdown.py` | After-conversion duplicate main cleanup and SI merge tool |
+| `paper_to_markdown/organize_figures.py` | Moves loose images in each bundle into a `figures/` subfolder; runs as a CLI and inside the conversion + monitor loops |
 | `paper_to_markdown/zotero_markdown.py` | Controller/all-in-one Zotero Markdown view builder |
 | `paper_to_markdown/settings.json` | Your local config (create from `.example.json`) |
 | `paper_to_markdown/pipeline.py` | Core conversion engine (imported, not run directly) |
 | `paper_to_markdown/frontmatter_index.py` | In-memory conversion index built from Markdown frontmatter |
 | `paper_to_markdown/common.py` | Shared utilities (imported) |
 | `paper_to_markdown/zotero_collections.py` | Zotero DB reader (imported) |
-| `zotero-paper-agent/` | Zotero 7 plugin source and build script |
 | `monitor.py` | Progress viewer |
 | `backfill.py` | Backfill missing supporting PDFs |
 

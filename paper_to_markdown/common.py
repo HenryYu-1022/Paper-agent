@@ -12,6 +12,7 @@ from typing import Any
 
 
 WORKFLOW_DIR = Path(__file__).resolve().parent
+LOCAL_PATH_CLS = type(WORKFLOW_DIR)
 DEFAULT_CONFIG_PATH = WORKFLOW_DIR / "settings.json"
 SUPPORTING_SUFFIX_RE = re.compile(r"^(?P<base>.+)_(?P<index>[1-9]\d*)$")
 MAIN_DUPLICATE_SUFFIX_RE = re.compile(r"^(?P<base>.+?)(?:[\s_-]+)(?P<index>[2-9]\d*)$")
@@ -41,8 +42,12 @@ def _require_non_empty(config: dict[str, Any], field: str) -> str:
     return value
 
 
+def local_path(value: str | os.PathLike[str]) -> Path:
+    return LOCAL_PATH_CLS(value)
+
+
 def _resolve_path_value(value: str) -> str:
-    return str(Path(value).expanduser().resolve())
+    return str(local_path(value).expanduser().resolve())
 
 
 def _normalize_command_value(value: str) -> str:
@@ -64,7 +69,7 @@ RUN_MODES = {"all-in-one", "runner", "controller"}
 
 
 def load_config(config_path: str | None = None) -> dict[str, Any]:
-    path = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+    path = local_path(config_path) if config_path else DEFAULT_CONFIG_PATH
     with path.open("r", encoding="utf-8") as f:
         config = json.load(f)
 

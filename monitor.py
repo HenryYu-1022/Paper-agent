@@ -28,6 +28,8 @@ from paper_to_markdown.pipeline import convert_one_pdf_with_retries
 from paper_to_markdown.postprocess_markdown import postprocess_library
 from paper_to_markdown.verify import _remove_orphan, _scan
 
+LOCAL_PATH_CLS = type(Path(__file__).resolve())
+
 
 def is_controller_mode(config: dict[str, Any]) -> bool:
     return str(config.get("run_mode", "")).strip() == "controller"
@@ -385,7 +387,7 @@ def historical_eta_text(
 
 
 def _background_log_paths(config: dict[str, Any]) -> tuple[Path, Path]:
-    log_dir = Path(config.get("output_root", ".")).expanduser() / "logs"
+    log_dir = LOCAL_PATH_CLS(config.get("output_root", ".")).expanduser() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / "monitor_background.log", log_dir / "monitor_background.err.log"
 
@@ -393,10 +395,10 @@ def _background_log_paths(config: dict[str, Any]) -> tuple[Path, Path]:
 def _background_python_path(config: dict[str, Any]) -> str:
     if os.name == "nt":
         pythonw_path = str(config.get("pythonw_path") or "").strip()
-        if pythonw_path and Path(pythonw_path).exists():
+        if pythonw_path and LOCAL_PATH_CLS(pythonw_path).exists():
             return pythonw_path
     python_path = str(config.get("python_path") or "").strip()
-    if python_path and Path(python_path).exists():
+    if python_path and LOCAL_PATH_CLS(python_path).exists():
         return python_path
     return sys.executable
 
@@ -406,7 +408,7 @@ def launch_background_monitor(args: argparse.Namespace) -> int:
     stdout_path, stderr_path = _background_log_paths(config)
     command = [
         _background_python_path(config),
-        str(Path(__file__).resolve()),
+        str(LOCAL_PATH_CLS(__file__).resolve()),
     ]
     if args.config:
         command.extend(["--config", args.config])
@@ -429,7 +431,7 @@ def launch_background_monitor(args: argparse.Namespace) -> int:
     with stdout_path.open("ab") as stdout_file, stderr_path.open("ab") as stderr_file:
         process = subprocess.Popen(
             command,
-            cwd=str(Path(__file__).resolve().parent),
+            cwd=str(LOCAL_PATH_CLS(__file__).resolve().parent),
             stdout=stdout_file,
             stderr=stderr_file,
             stdin=subprocess.DEVNULL,

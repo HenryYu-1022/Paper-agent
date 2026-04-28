@@ -24,12 +24,20 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import quote, unquote
 
-from .common import (
-    is_supporting_artifact_name,
-    load_config,
-    markdown_root,
-    setup_logger,
-)
+try:
+    from .common import (
+        is_supporting_artifact_name,
+        load_config,
+        markdown_root,
+        setup_logger,
+    )
+except ImportError:
+    from common import (
+        is_supporting_artifact_name,
+        load_config,
+        markdown_root,
+        setup_logger,
+    )
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff", ".svg"}
 FIGURES_DIRNAME = "figures"

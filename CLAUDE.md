@@ -21,8 +21,9 @@ python3 -m paper_to_markdown.postprocess_markdown --apply
 # Zotero Markdown views (controller/all-in-one host only)
 python3 -m paper_to_markdown.zotero_markdown --mode symlink --clean
 
-# Run daemon manually
-python3 -m paper_to_markdown.daemon --config paper_to_markdown/settings.json
+# Organize loose images in each bundle into a figures/ subfolder
+python3 -m paper_to_markdown.organize_figures            # dry run
+python3 -m paper_to_markdown.organize_figures --apply
 
 # Monitor and convert PDFs needing work
 python3 monitor.py
@@ -31,24 +32,22 @@ python3 monitor.py --no-convert  # report only
 
 # Tests
 python -m pytest tests/
-python -m pytest tests/test_daemon.py::DaemonTests::test_ping_returns_json_serializable_response
 ```
 
 ## Architecture
 
-The pipeline has three layers:
+The pipeline has two layers:
 
-**Conversion engine** (`pipeline.py`) — the core. Calls the external `marker_single` CLI to convert a PDF to raw Markdown, then post-processes it into a bundle directory. Handles duplicate detection (sha256 and numbered duplicate aliases before conversion, near-duplicate Markdown via `SequenceMatcher` after conversion) and supporting-document grouping (PDFs with filenames like `Paper_si.pdf` are placed inside the primary paper's bundle). Runner mode does not read Zotero SQLite and does not create collection mirrors.
+**Conversion engine** (`pipeline.py`) — the core. Calls the external `marker_single` CLI to convert a PDF to raw Markdown, then post-processes it into a bundle directory. Handles duplicate detection (sha256 and numbered duplicate aliases before conversion, near-duplicate Markdown via `SequenceMatcher` after conversion) and supporting-document grouping (PDFs with filenames like `Paper_si.pdf` are placed inside the primary paper's bundle). After materializing the primary bundle it calls `organize_figures.organize_bundle` to move loose images into a `figures/` subfolder. Runner mode does not read Zotero SQLite and does not create collection mirrors.
 
 **State index** (`frontmatter_index.py`) — conversion state is stored exclusively in YAML frontmatter of the output `.md` files, not in a separate manifest. `FrontmatterIndex` (aliased as `ManifestStore` in `pipeline.py`) walks the output tree on startup to rebuild state. This design keeps state in sync across Google Drive–synced devices without a central `manifest.json`.
-
-**Daemon** (`daemon.py`) — a JSON-line stdin/stdout protocol server. The Zotero plugin (`zotero-paper-agent/`) spawns this process and sends commands like `convert`, `archive_orphan`, `delete_orphan`, `rescan`, `ping`, `shutdown`. The daemon dispatches to the pipeline and replies with JSON.
 
 **Supporting modules:**
 - `common.py` — path helpers, config loading, frontmatter read/write, logger setup
 - `zotero_collections.py` — controller-side read-only access to `zotero.sqlite` for PDF→collection mapping
 - `zotero_markdown.py` — builds the controller-side Zotero Markdown view under `zotero_markdown/`
 - `postprocess_markdown.py` — after Marker finishes, classifies suffix variants as duplicate main papers or SI and merges/deletes without touching watcher flow
+- `organize_figures.py` — moves loose images in each bundle into a `figures/` subfolder and rewrites markdown links; runs both as a one-shot CLI and as part of the controller postprocess loop in `monitor.py`
 
 ## Output layout
 
@@ -58,7 +57,7 @@ output_root/
   zotero_markdown/  ← controller-built Zotero collection view symlinks/copies
   raw/              ← intermediate Marker output (temporary, safe to delete)
   logs/
-  archive/          ← orphaned bundles moved here by daemon
+  archive/          ← orphaned bundles moved here when monitor.py archives orphans
 ```
 
 Conversion state for each PDF lives in the `---` YAML frontmatter block of its `.md` file. Key fields: `conversion_status`, `source_pdf`, `source_pdf_sha256`, `zotero_collections`, `document_role` (`main` / `supporting`), `mirror_paths`.
