@@ -22,14 +22,13 @@
     "compute_sha256": "是否计算 PDF 的 SHA256 并写入 frontmatter，用于跨设备的变更检测；默认 true。Whether to compute the PDF's SHA256 and embed it in the frontmatter for cross-device change detection; defaults to true.",
     "log_level": "日志级别，例如 INFO、WARNING、ERROR。Log level, such as INFO, WARNING, or ERROR.",
     "run_mode": "运行模式：all-in-one（单机全功能，默认）/ runner（Win 端，只转换，不建镜像）/ controller（Mac 端，只巡检清理，不需要 marker）。Run mode: all-in-one (default) / runner (conversion only, no collection mirror) / controller (verification and cleanup only, marker not required).",
-    "orphan_grace_hours": "controller 模式：PDF 消失后等待多少小时再归档对应 Markdown，默认 24。Controller mode: how many hours to wait before archiving a Markdown whose PDF has disappeared, default 24.",
     "archive_before_delete": "controller 模式：删除孤儿 Markdown 前是否先归档到 archive/，默认 true。Controller mode: whether to move orphan bundles to archive/ before deletion, default true.",
-    "zotero_db_path": "controller/all-in-one 可选；Zotero 数据库 zotero.sqlite 的路径。runner 模式会忽略此字段。Optional for controller/all-in-one; path to Zotero's zotero.sqlite database. Ignored in runner mode.",
-    "zotero_markdown_root": "controller/all-in-one 可选；Zotero Markdown 视图输出目录，默认 output_root/zotero_markdown。Optional for controller/all-in-one; output directory for Zotero Markdown views, default output_root/zotero_markdown.",
-    "zotero_sync_interval_seconds": "可选；sync daemon 轮询 Zotero 数据库的间隔秒数，默认 60。Optional; polling interval in seconds for the Zotero sync daemon, default 60."
+    "zotero_api_key": "Zotero Web API key；也可用环境变量 ZOTERO_API_KEY。Zotero Web API key; may also be provided via ZOTERO_API_KEY.",
+    "zotero_library_type": "Zotero Web API library 类型：user 或 group。Zotero Web API library type: user or group.",
+    "zotero_library_id": "Zotero Web API library ID；user library 填 userID，group library 填 groupID。Zotero Web API library ID; use userID for user libraries and groupID for group libraries.",
+    "rag_chunks_jsonl_paths": "可选；需要同步 metadata 的 RAG chunk JSONL 文件列表。Optional list of RAG chunk JSONL files whose metadata should be synced."
   },
   "run_mode": "all-in-one",
-  "orphan_grace_hours": 24,
   "archive_before_delete": true,
   "input_root": "/Users/yourname/Documents/paper-library/input",
   "output_root": "/Users/yourname/Documents/paper-library/output",
@@ -47,7 +46,8 @@
   "paginate_output": false,
   "compute_sha256": true,
   "log_level": "INFO",
-  "zotero_db_path": "",
-  "zotero_markdown_root": "",
-  "zotero_sync_interval_seconds": 60
+  "zotero_api_key": "",
+  "zotero_library_type": "user",
+  "zotero_library_id": "",
+  "rag_chunks_jsonl_paths": []
 }

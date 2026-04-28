@@ -207,6 +207,19 @@ class FrontmatterIndex:
             "zotero_attachment_key",
             "annotations_count",
             "zotero_collections",
+            "citekey",
+            "doi",
+            "year",
+            "journal",
+            "collections",
+            "collection_keys",
+            "tags",
+            "zotero_match_method",
+            "zotero_match_confidence",
+            "agent_recommended_collections",
+            "agent_recommended_tags",
+            "agent_classification_confidence",
+            "agent_classification_applied_at",
         ]:
             if metadata.get(key) is not None:
                 entry[key] = metadata[key]
@@ -441,4 +454,3 @@ class FrontmatterIndex:
 
     def to_json(self) -> str:
         return json.dumps(self.data, ensure_ascii=False, indent=2)
-
